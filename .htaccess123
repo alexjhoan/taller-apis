@@ -1,0 +1,37 @@
+Options -Indexes
+
+RewriteEngine On
+
+# Ensure Authorization header is passed to PHP (Critical for JWT/OAuth)
+RewriteCond %{HTTP:Authorization} .
+RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+# Force HTTPS
+RewriteCond %{HTTPS} !=on
+RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301,NE]
+
+# Swagger Redirection: Redirect /swagger path to the actual directory inside nimbus-apis
+RewriteCond %{REQUEST_URI} ^/swagger [NC]
+RewriteRule ^swagger(.*)$ /nimbus-apis/swagger$1 [L,R=301]
+
+# API Routing: /nimbus-apis/ -> /nimbus-apis/index.php
+# Directs API requests to the API entry point
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteCond %{REQUEST_URI} ^/nimbus-apis/ [NC]
+RewriteRule ^(.*)$ /nimbus-apis/index.php/$1 [L,QSA]
+
+# HTML Helper: Anything else not a file/dir, checks if .html version exists
+# Matches requests that don't start with /nimbus-apis/
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteCond %{REQUEST_URI} !^/nimbus-apis/ [NC]
+
+# Check if the .html file exists before blindly rewriting (prevents 500 loops or weird 404s)
+RewriteCond %{DOCUMENT_ROOT}/$1.html -f
+RewriteRule ^(.*)$ /$1.html [L]
+
+# Security: Deny access to sensitive files using Apache 2.4 syntax
+<FilesMatch "^\.">
+  Require all denied
+</FilesMatch>

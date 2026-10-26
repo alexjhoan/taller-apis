@@ -1,0 +1,12 @@
+{
+  "require": {
+    "firebase/php-jwt": "^6.10",
+    "zircote/swagger-php": "^6.0",
+    "phpmailer/phpmailer": "^7.0"
+  },
+  "config": {
+    "allow-plugins": {
+      "php-http/discovery": true
+    }
+  }
+}
