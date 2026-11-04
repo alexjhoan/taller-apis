@@ -16,7 +16,7 @@ services:
       - mariadb_data:/var/lib/mysql
 
   php_backend:
-    build: ./backend
+    build: ./
     container_name: proyecto_php_backend
     restart: always
     ports:
