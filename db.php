@@ -9,9 +9,9 @@ class DataBase
       return self::$connection;
     }
 
-    $host = 'localhost';
-    $user = 'root';
-    $password = '';
+    $host = 'mariadb';
+    $user = 'usuario_php';
+    $password = 'MySuperSecureRootPassword123!';
     $dbName = 'taller';
     $port = 3306;
 
