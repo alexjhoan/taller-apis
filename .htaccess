@@ -1,0 +1,20 @@
+Options -Indexes
+
+RewriteEngine On
+
+# Ensure Authorization header is passed to PHP (Critical for JWT/OAuth)
+RewriteCond %{HTTP:Authorization} .
+RewriteRule .* - [E=HTTP_AUTHORIZATION:%{HTTP:Authorization}]
+
+# Force HTTPS (Descomenta si usas SSL en producción)
+# RewriteCond %{HTTPS} !=on
+# RewriteRule ^ https://%{HTTP_HOST}%{REQUEST_URI} [L,R=301,NE]
+
+# Swagger Redirection: Si accedes a /swagger
+RewriteCond %{REQUEST_URI} ^/swagger [NC]
+RewriteRule ^swagger(.*)$ /swagger$1 [L,R=301]
+
+# API Routing: Redirige todo el tráfico que no sea un archivo o carpeta real hacia index.php
+RewriteCond %{REQUEST_FILENAME} !-f
+RewriteCond %{REQUEST_FILENAME} !-d
+RewriteRule ^(.*)$ index.php/$1 [L,QSA]

@@ -7,7 +7,7 @@
   },
   "servers": [
     {
-      "url": "http://localhost/taller-apis/"
+      "url": "http://207.246.118.124:8081"
     }
   ],
   "tags": [
@@ -178,7 +178,9 @@
         "requestBody": { "$ref": "#/components/requestBodies/Order" },
         "responses": {
           "201": { "description": "Created" },
-          "422": { "description": "Invalid order fields or assigned_user_id contains an inactive user or a role other than admin/mechanic" },
+          "422": {
+            "description": "Invalid order fields or assigned_user_id contains an inactive user or a role other than admin/mechanic"
+          },
           "500": { "description": "Database error" }
         }
       },
@@ -205,7 +207,9 @@
           "401": { "description": "Missing or invalid bearer token" },
           "403": { "description": "Insufficient permissions" },
           "404": { "description": "Order not found" },
-          "422": { "description": "Invalid or unsupported order fields, including an inactive or non-mechanic assignment target" },
+          "422": {
+            "description": "Invalid or unsupported order fields, including an inactive or non-mechanic assignment target"
+          },
           "500": { "description": "Database error" }
         }
       }
@@ -301,16 +305,18 @@
                 "schema": { "$ref": "#/components/schemas/OrderAuditLogResponse" },
                 "example": {
                   "status": 200,
-                  "body": [{
-                    "id": 1,
-                    "order_id": 25,
-                    "action": "status_changed",
-                    "user_id": 2,
-                    "user_name": "Ana Torres",
-                    "user_role": "admin",
-                    "changes": { "status": { "from": "received", "to": "approved" } },
-                    "created_at": "2026-10-15 14:30:00"
-                  }],
+                  "body": [
+                    {
+                      "id": 1,
+                      "order_id": 25,
+                      "action": "status_changed",
+                      "user_id": 2,
+                      "user_name": "Ana Torres",
+                      "user_role": "admin",
+                      "changes": { "status": { "from": "received", "to": "approved" } },
+                      "created_at": "2026-10-15 14:30:00"
+                    }
+                  ],
                   "statusText": "success"
                 }
               }
@@ -417,7 +423,9 @@
           "401": { "description": "Missing or invalid bearer token" },
           "403": { "description": "Role cannot upload the requested evidence_type" },
           "404": { "description": "Order not found" },
-          "422": { "description": "Missing or invalid evidence_type, invalid upload, unsupported media type, invalid image, or image exceeds 40 megapixels" },
+          "422": {
+            "description": "Missing or invalid evidence_type, invalid upload, unsupported media type, invalid image, or image exceeds 40 megapixels"
+          },
           "500": { "description": "Media processing, FFmpeg, storage, or database failure" }
         }
       },
@@ -551,7 +559,16 @@
                   "status": {
                     "type": "string",
                     "nullable": true,
-                    "enum": ["received", "diagnosing", "awaiting_approval", "approved", "in_progress", "ready", "delivered", "cancelled"]
+                    "enum": [
+                      "received",
+                      "diagnosing",
+                      "awaiting_approval",
+                      "approved",
+                      "in_progress",
+                      "ready",
+                      "delivered",
+                      "cancelled"
+                    ]
                   },
                   "parts": {
                     "type": "array",
@@ -565,25 +582,16 @@
                         "decision": { "type": "string", "enum": ["accepted", "rejected"] }
                       }
                     },
-                    "example": [
-                      { "id": "7f6f5c2a-4129-4c79-9248-cc57f8d12201", "decision": "accepted" }
-                    ]
+                    "example": [{ "id": "7f6f5c2a-4129-4c79-9248-cc57f8d12201", "decision": "accepted" }]
                   }
                 },
                 "additionalProperties": {
-                  "oneOf": [
-                    { "type": "integer" },
-                    { "type": "string" },
-                    { "type": "boolean" },
-                    { "type": "null" }
-                  ]
+                  "oneOf": [{ "type": "integer" }, { "type": "string" }, { "type": "boolean" }, { "type": "null" }]
                 },
                 "example": {
                   "status": "awaiting_approval",
                   "budget_accepted": 1,
-                  "parts": [
-                    { "id": "7f6f5c2a-4129-4c79-9248-cc57f8d12201", "decision": "accepted" }
-                  ]
+                  "parts": [{ "id": "7f6f5c2a-4129-4c79-9248-cc57f8d12201", "decision": "accepted" }]
                 }
               }
             }
@@ -605,7 +613,9 @@
           },
           "400": { "description": "Invalid or empty payload" },
           "404": { "description": "Order or parts item not found for this order" },
-          "422": { "description": "Status is invalid, a field is not an existing writable status/budget_* column, or a parts decision has invalid/duplicate IDs or an invalid decision" },
+          "422": {
+            "description": "Status is invalid, a field is not an existing writable status/budget_* column, or a parts decision has invalid/duplicate IDs or an invalid decision"
+          },
           "500": { "description": "Database error" }
         }
       }
@@ -694,7 +704,11 @@
                 "required": ["id"],
                 "properties": {
                   "id": { "type": "integer", "minimum": 1 },
-                  "read_at": { "type": "string", "format": "date-time", "description": "Ignored by the mark-read operation." },
+                  "read_at": {
+                    "type": "string",
+                    "format": "date-time",
+                    "description": "Ignored by the mark-read operation."
+                  },
                   "updated_by": {
                     "type": "string",
                     "description": "Optional compatibility field containing a JSON-encoded identity whose ID must match the authenticated user; the stored identity is derived by the backend.",
@@ -717,9 +731,13 @@
             }
           },
           "401": { "description": "Missing or invalid bearer token" },
-          "403": { "description": "Legacy alerts require the admin role, or updated_by ID does not match the authenticated user" },
+          "403": {
+            "description": "Legacy alerts require the admin role, or updated_by ID does not match the authenticated user"
+          },
           "404": { "description": "Alert not found" },
-          "422": { "description": "Missing or invalid alert ID, invalid updated_by JSON, or unsupported fields in the request body" },
+          "422": {
+            "description": "Missing or invalid alert ID, invalid updated_by JSON, or unsupported fields in the request body"
+          },
           "500": { "description": "Database error" }
         }
       }
@@ -1077,8 +1095,16 @@
           "vehicle_model": { "type": "string" },
           "vehicle_year": { "type": "integer", "nullable": true },
           "vehicle_color": { "type": "string", "nullable": true },
-          "images": { "type": "string", "nullable": true, "description": "Comma-separated processed image filenames, maintained by evidence uploads." },
-          "videos": { "type": "string", "nullable": true, "description": "Comma-separated processed video filenames, maintained by evidence uploads." },
+          "images": {
+            "type": "string",
+            "nullable": true,
+            "description": "Comma-separated processed image filenames, maintained by evidence uploads."
+          },
+          "videos": {
+            "type": "string",
+            "nullable": true,
+            "description": "Comma-separated processed video filenames, maintained by evidence uploads."
+          },
           "evidence": {
             "type": "array",
             "description": "Typed evidence ordered by reception, work_progress, final, then created_at ascending. Visibility depends on the authenticated role.",
@@ -1142,8 +1168,16 @@
           "vehicle_model": { "type": "string" },
           "vehicle_year": { "type": "integer", "nullable": true },
           "vehicle_color": { "type": "string", "nullable": true },
-          "images": { "type": "string", "nullable": true, "description": "Comma-separated processed image filenames, maintained by evidence uploads." },
-          "videos": { "type": "string", "nullable": true, "description": "Comma-separated processed video filenames, maintained by evidence uploads." },
+          "images": {
+            "type": "string",
+            "nullable": true,
+            "description": "Comma-separated processed image filenames, maintained by evidence uploads."
+          },
+          "videos": {
+            "type": "string",
+            "nullable": true,
+            "description": "Comma-separated processed video filenames, maintained by evidence uploads."
+          },
           "vehicle_details": { "type": "string", "nullable": true },
           "mileage": { "type": "integer" },
           "fuel_level": { "type": "string" },
@@ -1157,10 +1191,7 @@
               "additionalProperties": true,
               "properties": {
                 "id": {
-                  "oneOf": [
-                    { "type": "integer" },
-                    { "type": "string", "minLength": 1 }
-                  ]
+                  "oneOf": [{ "type": "integer" }, { "type": "string", "minLength": 1 }]
                 },
                 "approvalStatus": { "type": "string", "enum": ["pending", "accepted", "rejected"] }
               }
@@ -1380,7 +1411,16 @@
                 "status": {
                   "type": "string",
                   "nullable": true,
-                  "enum": ["received", "diagnosing", "awaiting_approval", "approved", "in_progress", "ready", "delivered", "cancelled"]
+                  "enum": [
+                    "received",
+                    "diagnosing",
+                    "awaiting_approval",
+                    "approved",
+                    "in_progress",
+                    "ready",
+                    "delivered",
+                    "cancelled"
+                  ]
                 },
                 "parts": {
                   "description": "Parts array, either as JSON or JSON-encoded string",
@@ -1392,10 +1432,7 @@
                 },
                 "checklist": {
                   "description": "Checklist array, either as JSON or JSON-encoded string",
-                  "oneOf": [
-                    { "type": "array" },
-                    { "type": "string", "example": "[]" }
-                  ]
+                  "oneOf": [{ "type": "array" }, { "type": "string", "example": "[]" }]
                 }
               }
             }
@@ -1454,10 +1491,7 @@
                 },
                 "checklist": {
                   "description": "Checklist array, either as JSON or JSON-encoded string",
-                  "oneOf": [
-                    { "type": "array" },
-                    { "type": "string", "example": "[]" }
-                  ]
+                  "oneOf": [{ "type": "array" }, { "type": "string", "example": "[]" }]
                 }
               }
             }
@@ -1559,10 +1593,7 @@
                     "required": ["id", "decision"],
                     "properties": {
                       "id": {
-                        "oneOf": [
-                          { "type": "integer" },
-                          { "type": "string", "minLength": 1 }
-                        ]
+                        "oneOf": [{ "type": "integer" }, { "type": "string", "minLength": 1 }]
                       },
                       "decision": { "type": "string", "enum": ["accepted", "rejected"] }
                     }
