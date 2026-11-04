@@ -12,10 +12,10 @@ if (in_array($origin, $allowed_domains)) {
   header("Access-Control-Allow-Origin: " . $origin);
 } else {
   // Default fallback
-  header("Access-Control-Allow-Origin: https://bwtne.com");
+  header("Access-Control-Allow-Origin: http://ncbyiqsys3jptteev2yuoa1a.207.246.118.124.sslip.io");
 }
 
-header("Access-Control-Allow-Origin: *");
+// header("Access-Control-Allow-Origin: *");
 header("Vary: Origin");
 header("Content-Type: application/json; charset=UTF-8");
 header("Access-Control-Allow-Methods: OPTIONS,GET,PUT,PATCH,POST,DELETE");
