@@ -1,18 +1,19 @@
 <?php
 
-// $allowed_domains = [
-//   'http://localhost:3000'
-// ];
+$allowed_domains = [
+  'http://localhost:3000',
+  'http://ncbyiqsys3jptteev2yuoa1a.207.246.118.124.sslip.io'
+];
 
-// $origin = $_SERVER['HTTP_ORIGIN'] ?? '';
+$origin = $_SERVER['HTTP_ORIGIN'] ?? '';
 
-// // Check if origin is allowed
-// if (in_array($origin, $allowed_domains)) {
-//   header("Access-Control-Allow-Origin: " . $origin);
-// } else {
-//   // Default fallback
-//   header("Access-Control-Allow-Origin: https://bwtne.com");
-//   }
+// Check if origin is allowed
+if (in_array($origin, $allowed_domains)) {
+  header("Access-Control-Allow-Origin: " . $origin);
+} else {
+  // Default fallback
+  header("Access-Control-Allow-Origin: https://bwtne.com");
+}
 
 header("Access-Control-Allow-Origin: *");
 header("Vary: Origin");
