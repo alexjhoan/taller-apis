@@ -152,7 +152,7 @@
         "summary": "List active work orders excluding cancelled and delivered",
         "responses": {
           "200": {
-            "description": "Work orders whose status is not cancelled or delivered (including orders with a null status), ordered by descending ID. Each order includes evidence as absolute URL strings.",
+            "description": "Work orders whose status is not cancelled or delivered (including orders with a null status), ordered by descending ID. Each order includes typed evidence visible to the authenticated role, grouped by evidence_type and ordered by created_at ascending within each group.",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/WorkOrderListResponse" }
@@ -174,15 +174,19 @@
         "security": [{ "BearerAuth": [] }],
         "tags": ["Orders"],
         "summary": "Create vehicle reception order",
-        "description": "Creates the order and audit entry transactionally. After commit, a best-effort order_created alert is emitted for mechanic-created orders; admin-created orders do not emit this alert.",
+        "description": "Creates the order and audit entry transactionally. After commit, mechanic-created orders emit order_created. When an admin creates an order assigned to active admins and/or mechanics, order_assigned is emitted to all active admins and each assigned user.",
         "requestBody": { "$ref": "#/components/requestBodies/Order" },
-        "responses": { "201": { "description": "Created" } }
+        "responses": {
+          "201": { "description": "Created" },
+          "422": { "description": "Invalid order fields or assigned_user_id contains an inactive user or a role other than admin/mechanic" },
+          "500": { "description": "Database error" }
+        }
       },
       "patch": {
         "security": [{ "BearerAuth": [] }],
         "tags": ["Orders"],
         "summary": "Update an existing work order",
-        "description": "After the order update commits, emits best-effort alerts for newly requested pending technician parts, a budget_accepted transition from 0 to 1, and actual status changes. Repeated pending parts and unchanged status do not emit duplicate alerts. Budget acceptance uses the sum of budget_items quantity × unit_price.",
+        "description": "After the order update commits, emits best-effort alerts for new assignments, newly requested pending technician parts, a budget_accepted transition from 0 to 1, and actual status changes. Only admins may change assigned_user_id, and each target must be an active admin or mechanic. Repeated pending parts and unchanged status do not emit duplicate alerts. Budget acceptance uses the sum of budget_items quantity × unit_price.",
         "requestBody": { "$ref": "#/components/requestBodies/OrderPatch" },
         "responses": {
           "200": {
@@ -201,7 +205,7 @@
           "401": { "description": "Missing or invalid bearer token" },
           "403": { "description": "Insufficient permissions" },
           "404": { "description": "Order not found" },
-          "422": { "description": "Invalid or unsupported order fields" },
+          "422": { "description": "Invalid or unsupported order fields, including an inactive or non-mechanic assignment target" },
           "500": { "description": "Database error" }
         }
       }
@@ -243,7 +247,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Delivered orders and pagination metadata. Each order includes evidence as absolute URL strings.",
+            "description": "Delivered orders and pagination metadata. Each order includes typed evidence visible to the authenticated role, grouped by evidence_type and ordered by created_at ascending within each group.",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/DeliveredWorkOrderListResponse" }
@@ -261,11 +265,11 @@
       "get": {
         "security": [{ "BearerAuth": [] }],
         "tags": ["Orders"],
-        "summary": "Get order with role-aware budget costs and ordered evidence",
+        "summary": "Get order with role-aware budget costs and evidence",
         "parameters": [{ "$ref": "#/components/parameters/idPath" }],
         "responses": {
           "200": {
-            "description": "Order, role-aware budget and evidence URL strings ordered by ascending evidence ID (upload order).",
+            "description": "Order, role-aware budget and evidence grouped by type and ordered by creation time ascending, filtered by authenticated role.",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/WorkOrderDetailResponse" }
@@ -369,19 +373,24 @@
         "security": [{ "BearerAuth": [] }],
         "tags": ["Evidence"],
         "summary": "Upload and optimize one order photo or video",
-        "description": "Send one file per request (maximum 50 MB) and wait for its response before uploading the next file to preserve upload order. JPEG, PNG, and WebP images up to 40 megapixels are stored as compressed JPG with a maximum dimension of 1000 px and white background for transparency. MP4 and QuickTime videos are stored as H.264 MP4 with a maximum dimension of 1280 px. Processed files are stored in assets/evidence/{id_order}/ with a timestamp-based name and random collision-resistant suffix. The generated filename (without its path) is also appended, comma-separated, to work_orders.images or work_orders.videos, and the full path remains registered in order_evidence.file_url. Requires FFmpeg on the server PATH or configured via FFMPEG_BINARY.",
+        "description": "Requires evidence_type. Reception users may upload reception only; mechanics may upload work_progress only; admins may upload all three categories. Send one file per request (maximum 50 MB) and wait for its response before uploading the next file to preserve upload order. JPEG, PNG, and WebP images up to 40 megapixels are stored as compressed JPG with a maximum dimension of 1000 px and white background for transparency. MP4 and QuickTime videos are stored as H.264 MP4 with a maximum dimension of 1280 px. Processed files are stored in assets/evidence/{id_order}/ with a timestamp-based name and random collision-resistant suffix. The generated filename (without its path) is also appended, comma-separated, to work_orders.images or work_orders.videos, and the full path remains registered in order_evidence.file_url. Requires FFmpeg on the server PATH or configured via FFMPEG_BINARY.",
         "parameters": [{ "$ref": "#/components/parameters/idPath" }],
         "requestBody": {
+          "required": true,
           "content": {
             "multipart/form-data": {
               "schema": {
                 "type": "object",
-                "required": ["file"],
+                "required": ["file", "evidence_type"],
                 "properties": {
                   "file": {
                     "type": "string",
                     "format": "binary",
                     "description": "One image (JPEG, PNG, WebP) or video (MP4, QuickTime/MOV), maximum 50 MB; images may not exceed 40 megapixels."
+                  },
+                  "evidence_type": {
+                    "type": "string",
+                    "enum": ["reception", "work_progress", "final"]
                   }
                 }
               }
@@ -397,7 +406,8 @@
                   "status": 201,
                   "body": {
                     "id": 10,
-                    "url": "assets/evidence/25/20261010_114759_a1b2c3d4.jpg"
+                    "url": "assets/evidence/25/20261010_114759_a1b2c3d4.jpg",
+                    "evidence_type": "work_progress"
                   },
                   "statusText": "Evidence uploaded"
                 }
@@ -405,9 +415,65 @@
             }
           },
           "401": { "description": "Missing or invalid bearer token" },
+          "403": { "description": "Role cannot upload the requested evidence_type" },
           "404": { "description": "Order not found" },
-          "422": { "description": "Invalid upload, unsupported media type, invalid image, or image exceeds 40 megapixels" },
+          "422": { "description": "Missing or invalid evidence_type, invalid upload, unsupported media type, invalid image, or image exceeds 40 megapixels" },
           "500": { "description": "Media processing, FFmpeg, storage, or database failure" }
+        }
+      },
+      "get": {
+        "security": [{ "BearerAuth": [] }],
+        "tags": ["Evidence"],
+        "summary": "List evidence visible to the authenticated role",
+        "description": "Returns evidence grouped by reception, work_progress, and final, with oldest files first within each group. Reception users see reception only; mechanics see reception and work_progress; admins see every type. Legacy files without evidence rows are included as work_progress.",
+        "parameters": [
+          { "$ref": "#/components/parameters/idPath" },
+          {
+            "name": "type",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string", "enum": ["reception", "work_progress", "final"] }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Evidence ordered by evidence_type (reception, work_progress, final), then created_at ascending.",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/EvidenceListResponse" }
+              }
+            }
+          },
+          "401": { "description": "Missing or invalid bearer token" },
+          "403": { "description": "Role cannot view the requested evidence type" },
+          "404": { "description": "Order not found" },
+          "422": { "description": "Invalid order ID or evidence type" },
+          "500": { "description": "Database error" }
+        }
+      }
+    },
+    "/api/orders/{id}/evidence/{evidenceId}": {
+      "delete": {
+        "security": [{ "BearerAuth": [] }],
+        "tags": ["Evidence"],
+        "summary": "Delete order evidence",
+        "description": "Only admins may delete evidence. Deletes the evidence row, removes its filename from the order's images or videos list, and removes its stored file.",
+        "parameters": [
+          { "$ref": "#/components/parameters/idPath" },
+          {
+            "name": "evidenceId",
+            "in": "path",
+            "required": true,
+            "schema": { "type": "integer", "minimum": 1 }
+          }
+        ],
+        "responses": {
+          "200": { "description": "Evidence deleted" },
+          "401": { "description": "Missing or invalid bearer token" },
+          "403": { "description": "Administrator role required" },
+          "404": { "description": "Evidence not found for this order" },
+          "422": { "description": "Invalid order or evidence ID" },
+          "500": { "description": "Database or storage error" }
         }
       }
     },
@@ -454,7 +520,7 @@
       "get": {
         "tags": ["Public Portal"],
         "summary": "Get a public work order by its access token",
-        "description": "Returns every current work_orders column dynamically, except public_token (access credential) and created_by (internal author ID), plus budget items with IDs and customer_decision values for the public decision endpoint and all evidence as absolute URL strings ordered by upload.",
+        "description": "Returns every current work_orders column dynamically, except public_token (access credential) and created_by (internal author ID), plus budget items with IDs and customer_decision values for the public decision endpoint and all evidence as typed objects ordered by reception, work_progress, final, then created_at ascending.",
         "parameters": [{ "$ref": "#/components/parameters/token" }],
         "responses": {
           "200": {
@@ -575,19 +641,26 @@
       "get": {
         "security": [{ "BearerAuth": [] }],
         "tags": ["Alerts"],
-        "summary": "List alerts for administrators",
+        "summary": "List alerts visible to the authenticated user",
         "parameters": [
           {
             "name": "unread",
             "in": "query",
             "required": false,
-            "description": "Set to 1 to return only unread alerts (maximum 50). Without this parameter, the latest 100 alerts are returned.",
+            "description": "Set to 1 to return alerts unread by the authenticated user (maximum 50). New alerts are limited to their recipients; historical untargeted alerts remain visible only to admins during migration.",
+            "schema": { "type": "string", "enum": ["1"] }
+          },
+          {
+            "name": "read",
+            "in": "query",
+            "required": false,
+            "description": "Set to 1 to return alerts read by the authenticated user, ordered by read_at descending and limited to 50. For historical untargeted alerts, only admins see the legacy global read_at during migration. Use either read or unread, not both.",
             "schema": { "type": "string", "enum": ["1"] }
           }
         ],
         "responses": {
           "200": {
-            "description": "Alerts ordered by created_at descending; unread results are limited to 50 and all-alert results to 100.",
+            "description": "New alerts are returned only to their recipients (all active admins and assigned active admins/mechanics); read_at and updated_by come from that user's receipt. Historical untargeted alerts remain visible only to admins and use the legacy global read_at. Unread results are limited to 50, read results to 50, and unfiltered results to 100.",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/AlertListResponse" }
@@ -595,15 +668,23 @@
             }
           },
           "401": { "description": "Missing or invalid bearer token" },
-          "403": { "description": "Administrator role required" },
+          "422": { "description": "Use either read or unread, not both" },
           "500": { "description": "Database error" }
+        }
+      },
+      "post": {
+        "tags": ["Alerts"],
+        "summary": "Alert creation is server-managed",
+        "description": "Alert creation is performed by backend order workflows so recipients can be derived from trusted order assignments. Client-created alerts are not supported.",
+        "responses": {
+          "405": { "description": "Alerts are generated by the server" }
         }
       },
       "patch": {
         "security": [{ "BearerAuth": [] }],
         "tags": ["Alerts"],
-        "summary": "Mark an alert as read",
-        "description": "With an id-only payload, sets read_at once and returns the current alert. An optional client-supplied read_at is ignored. Other existing generic alert patch payloads remain supported.",
+        "summary": "Mark a visible alert as read",
+        "description": "For a targeted alert, records read_at and normalized updated_by identity for the authenticated recipient only. Identity is derived from the authenticated user in the database; an optional updated_by JSON string is accepted and validated for compatibility. Historical untargeted alerts retain global read behavior and can only be marked by admins during migration. The read_at request field is ignored.",
         "requestBody": {
           "required": true,
           "content": {
@@ -612,10 +693,15 @@
                 "type": "object",
                 "required": ["id"],
                 "properties": {
-                  "id": { "type": "integer", "minimum": 0 },
-                  "read_at": { "type": "string", "format": "date-time", "description": "Ignored by the mark-read operation." }
+                  "id": { "type": "integer", "minimum": 1 },
+                  "read_at": { "type": "string", "format": "date-time", "description": "Ignored by the mark-read operation." },
+                  "updated_by": {
+                    "type": "string",
+                    "description": "Optional compatibility field containing a JSON-encoded identity whose ID must match the authenticated user; the stored identity is derived by the backend.",
+                    "example": "{\"id\":2,\"firstName\":\"Ana\",\"lastName\":\"Torres\",\"role\":\"admin\"}"
+                  }
                 },
-                "additionalProperties": true,
+                "additionalProperties": false,
                 "example": { "id": 7 }
               }
             }
@@ -623,7 +709,7 @@
         },
         "responses": {
           "200": {
-            "description": "The alert, with read_at set to the first-read time",
+            "description": "The visible alert, with read_at and updated_by set for this user (or globally for a historical untargeted alert)",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/AlertResponse" }
@@ -631,9 +717,9 @@
             }
           },
           "401": { "description": "Missing or invalid bearer token" },
-          "403": { "description": "Administrator role required" },
+          "403": { "description": "Legacy alerts require the admin role, or updated_by ID does not match the authenticated user" },
           "404": { "description": "Alert not found" },
-          "422": { "description": "Missing or invalid alert ID" },
+          "422": { "description": "Missing or invalid alert ID, invalid updated_by JSON, or unsupported fields in the request body" },
           "500": { "description": "Database error" }
         }
       }
@@ -642,18 +728,31 @@
       "post": {
         "security": [{ "BearerAuth": [] }],
         "tags": ["Alerts"],
-        "summary": "Mark all unread alerts as read",
+        "summary": "Mark all visible unread alerts as read",
         "requestBody": {
           "required": false,
           "content": {
             "application/json": {
-              "schema": { "type": "object", "maxProperties": 0, "example": {} }
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "updated_by": {
+                    "type": "string",
+                    "description": "Optional legacy JSON-encoded editor identity accepted for compatibility and ignored.",
+                    "example": "{\"id\":2,\"firstName\":\"admin\",\"lastName\":\"last_name\",\"role\":\"admin\"}"
+                  }
+                },
+                "additionalProperties": false,
+                "example": {
+                  "updated_by": "{\"id\":2,\"firstName\":\"admin\",\"lastName\":\"last_name\",\"role\":\"admin\"}"
+                }
+              }
             }
           }
         },
         "responses": {
           "200": {
-            "description": "Number of alerts newly marked as read",
+            "description": "Number of this user's targeted alerts marked read, plus legacy global alerts marked read by admins. Each new read receipt stores the authenticated user's normalized identity in updated_by.",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/AlertReadAllResponse" },
@@ -666,8 +765,7 @@
             }
           },
           "401": { "description": "Missing or invalid bearer token" },
-          "403": { "description": "Administrator role required" },
-          "422": { "description": "Request body must be empty" },
+          "422": { "description": "Request body contains unsupported fields or updated_by is not a JSON string" },
           "500": { "description": "Database error" }
         }
       }
@@ -829,8 +927,8 @@
               "budget": { "type": "array", "items": { "type": "object" } },
               "evidence": {
                 "type": "array",
-                "description": "Absolute URLs for all processed evidence files, ordered by upload.",
-                "items": { "type": "string", "format": "uri" }
+                "description": "Evidence ordered by category and then creation time ascending.",
+                "items": { "$ref": "#/components/schemas/EvidenceItem" }
               }
             },
             "required": ["order", "budget", "evidence"]
@@ -839,6 +937,33 @@
           "total": { "type": "integer", "example": 1 }
         },
         "required": ["status", "body", "statusText", "total"]
+      },
+      "EvidenceListResponse": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "integer", "example": 200 },
+          "body": {
+            "type": "array",
+            "items": { "$ref": "#/components/schemas/EvidenceItem" }
+          },
+          "statusText": { "type": "string", "example": "success" },
+          "total": { "type": "integer", "example": 2 }
+        },
+        "required": ["status", "body", "statusText", "total"]
+      },
+      "EvidenceItem": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "integer", "nullable": true },
+          "url": { "type": "string", "format": "uri" },
+          "evidence_type": {
+            "type": "string",
+            "enum": ["reception", "work_progress", "final"]
+          },
+          "type": { "type": "string", "enum": ["photo", "video"], "nullable": true },
+          "created_at": { "type": "string", "format": "date-time", "nullable": true }
+        },
+        "required": ["id", "url", "evidence_type", "type", "created_at"]
       },
       "AlertListResponse": {
         "type": "object",
@@ -895,6 +1020,7 @@
             "type": "string",
             "enum": [
               "order_created",
+              "order_assigned",
               "order_status_changed",
               "part_requested",
               "budget_accepted",
@@ -903,10 +1029,21 @@
             ]
           },
           "message": { "type": "string", "maxLength": 255 },
-          "read_at": { "type": "string", "nullable": true, "example": "2026-10-23 09:55:12" },
+          "read_at": {
+            "type": "string",
+            "nullable": true,
+            "description": "Read time for the authenticated user on targeted alerts; legacy global read time on historical alerts.",
+            "example": "2026-10-23 09:55:12"
+          },
+          "updated_by": {
+            "type": "string",
+            "nullable": true,
+            "description": "JSON-encoded identity for the first authenticated reader on historical alerts; for targeted alerts this is the authenticated reader identity from alert_recipients.updated_by.",
+            "example": "{\"id\":2,\"name\":\"Ana Torres\",\"role\":\"admin\"}"
+          },
           "created_at": { "type": "string", "example": "2026-10-23 09:41:00" }
         },
-        "required": ["id", "order_id", "type", "message", "read_at", "created_at"]
+        "required": ["id", "order_id", "type", "message", "read_at", "updated_by", "created_at"]
       },
       "WhatsAppUrlResponse": {
         "type": "object",
@@ -930,7 +1067,11 @@
           "customer_name": { "type": "string" },
           "customer_phone": { "type": "string" },
           "customer_email": { "type": "string", "nullable": true },
-          "assigned_user_id": { "type": "integer", "nullable": true },
+          "assigned_user_id": {
+            "type": "string",
+            "nullable": true,
+            "description": "JSON-encoded array of assigned active admin/mechanic IDs, e.g. [2,4]. Legacy single numeric IDs are still accepted on write."
+          },
           "vehicle_plate": { "type": "string" },
           "vehicle_make": { "type": "string" },
           "vehicle_model": { "type": "string" },
@@ -940,8 +1081,8 @@
           "videos": { "type": "string", "nullable": true, "description": "Comma-separated processed video filenames, maintained by evidence uploads." },
           "evidence": {
             "type": "array",
-            "description": "Absolute URLs for all processed evidence files, ordered by upload.",
-            "items": { "type": "string", "format": "uri" }
+            "description": "Typed evidence ordered by reception, work_progress, final, then created_at ascending. Visibility depends on the authenticated role.",
+            "items": { "$ref": "#/components/schemas/EvidenceItem" }
           },
           "mileage": { "type": "integer" },
           "fuel_level": { "type": "string" },
@@ -971,8 +1112,8 @@
               },
               "evidence": {
                 "type": "array",
-                "description": "Absolute URLs for all processed evidence files, ordered by upload.",
-                "items": { "type": "string", "format": "uri" }
+                "description": "All typed evidence ordered by reception, work_progress, final, then created_at ascending.",
+                "items": { "$ref": "#/components/schemas/EvidenceItem" }
               }
             },
             "required": ["order", "budget", "evidence"]
@@ -991,7 +1132,11 @@
           "customer_name": { "type": "string" },
           "customer_phone": { "type": "string" },
           "customer_email": { "type": "string", "nullable": true },
-          "assigned_user_id": { "type": "integer", "nullable": true },
+          "assigned_user_id": {
+            "type": "string",
+            "nullable": true,
+            "description": "JSON-encoded array of assigned active admin/mechanic IDs, e.g. [2,4]."
+          },
           "vehicle_plate": { "type": "string" },
           "vehicle_make": { "type": "string" },
           "vehicle_model": { "type": "string" },
@@ -1211,9 +1356,13 @@
                 "customer_phone": { "type": "string" },
                 "customer_email": { "type": "string", "nullable": true },
                 "assigned_user_id": {
-                  "type": "integer",
+                  "description": "Optional assigned user IDs. Every ID must identify an active admin or mechanic. When set by an admin, the backend emits order_assigned to all active admins and each assigned user.",
                   "nullable": true,
-                  "description": "Optional ID of the user assigned to the order"
+                  "oneOf": [
+                    { "type": "array", "items": { "type": "integer", "minimum": 1 }, "uniqueItems": true },
+                    { "type": "string", "example": "[2,4]" },
+                    { "type": "integer", "minimum": 1 }
+                  ]
                 },
                 "vehicle_plate": { "type": "string" },
                 "vehicle_make": { "type": "string" },
@@ -1283,7 +1432,15 @@
                 "customer_name": { "type": "string" },
                 "customer_phone": { "type": "string" },
                 "customer_email": { "type": "string", "nullable": true },
-                "assigned_user_id": { "type": "integer", "nullable": true },
+                "assigned_user_id": {
+                  "description": "Only admins may change the assignment. Send an array of unique active admin/mechanic IDs or a JSON-encoded array string such as [2,4]. Changing the assignment emits order_assigned to all active admins and assigned users.",
+                  "nullable": true,
+                  "oneOf": [
+                    { "type": "array", "items": { "type": "integer", "minimum": 1 }, "uniqueItems": true },
+                    { "type": "string", "example": "[2,4]" },
+                    { "type": "integer", "minimum": 1 }
+                  ]
+                },
                 "status": { "type": "string", "nullable": true },
                 "failure_description": { "type": "string" },
                 "mileage": { "type": "integer", "minimum": 0 },

@@ -7,6 +7,7 @@ require_once __DIR__ . '/../../utils.php';
 class WorkshopController extends Controller
 {
   private const ORDER_WRITE_BLOCKLIST = ['id', 'public_token', 'created_by', 'created_at', 'updated_at', 'images', 'videos'];
+  private const EVIDENCE_TYPES = ['reception', 'work_progress', 'final'];
 
   private function user(array $roles = []): array
   {
@@ -15,6 +16,7 @@ class WorkshopController extends Controller
     if ($roles && !in_array($role, $roles, true)) {
       $this->jsonResponse([], 403, 'Insufficient permissions');
     }
+    $user['role'] = $role;
     return $user;
   }
 
@@ -46,7 +48,30 @@ class WorkshopController extends Controller
     return $scheme . '://' . $host . $basePath . '/' . $encodedPath;
   }
 
-  private function evidenceUrlsByOrder(mysqli $db, array $orders): array
+  private function evidenceTypesForRole(string $role): array
+  {
+    return match ($role) {
+      'admin' => self::EVIDENCE_TYPES,
+      'mechanic' => ['reception', 'work_progress'],
+      'reception' => ['reception'],
+      default => [],
+    };
+  }
+
+  private function evidenceMediaType(mixed $mediaType, string $fileUrl): ?string
+  {
+    if (in_array($mediaType, ['photo', 'video'], true)) {
+      return $mediaType;
+    }
+
+    return match (strtolower(pathinfo($fileUrl, PATHINFO_EXTENSION))) {
+      'jpg' => 'photo',
+      'mp4' => 'video',
+      default => null,
+    };
+  }
+
+  private function evidenceUrlsByOrder(mysqli $db, array $orders, ?array $allowedTypes = null): array
   {
     $orderIds = array_values(array_unique(array_filter(
       array_map('intval', array_column($orders, 'id')),
@@ -57,27 +82,45 @@ class WorkshopController extends Controller
     }
 
     $placeholders = implode(', ', array_fill(0, count($orderIds), '?'));
+    $allowedTypes ??= self::EVIDENCE_TYPES;
+    if ($allowedTypes === []) {
+      return [];
+    }
+
+    $typePlaceholders = implode(', ', array_fill(0, count($allowedTypes), '?'));
     $stmt = $db->prepare(
-      "SELECT order_id, file_url FROM order_evidence
-       WHERE order_id IN ({$placeholders}) ORDER BY id ASC"
+      "SELECT id, order_id, evidence_type, type, file_url, created_at
+       FROM order_evidence
+       WHERE order_id IN ({$placeholders}) AND evidence_type IN ({$typePlaceholders})
+       ORDER BY FIELD(evidence_type, 'reception', 'work_progress', 'final'), created_at ASC, id ASC"
     );
-    $types = str_repeat('i', count($orderIds));
+    $types = str_repeat('i', count($orderIds)) . str_repeat('s', count($allowedTypes));
     $bindParams = [$types];
     foreach ($orderIds as &$orderId) {
       $bindParams[] = &$orderId;
     }
     unset($orderId);
+    foreach ($allowedTypes as &$allowedType) {
+      $bindParams[] = &$allowedType;
+    }
+    unset($allowedType);
     call_user_func_array([$stmt, 'bind_param'], $bindParams);
     $stmt->execute();
 
     $evidenceByOrder = [];
     $seenUrls = [];
     $result = $stmt->get_result();
-    while ($evidence = $result->fetch_assoc()) {
-      $orderId = (int) $evidence['order_id'];
-      $url = $this->absoluteEvidenceUrl((string) $evidence['file_url']);
+    while ($row = $result->fetch_assoc()) {
+      $orderId = (int) $row['order_id'];
+      $url = $this->absoluteEvidenceUrl((string) $row['file_url']);
       if (!isset($seenUrls[$orderId][$url])) {
-        $evidenceByOrder[$orderId][] = $url;
+        $evidenceByOrder[$orderId][] = [
+          'id' => (int) $row['id'],
+          'url' => $url,
+          'evidence_type' => $row['evidence_type'],
+          'type' => $this->evidenceMediaType($row['type'], (string) $row['file_url']),
+          'created_at' => $row['created_at'],
+        ];
         $seenUrls[$orderId][$url] = true;
       }
     }
@@ -86,6 +129,9 @@ class WorkshopController extends Controller
     foreach ($orders as $order) {
       $orderId = (int) $order['id'];
       foreach (['images', 'videos'] as $field) {
+        if (!in_array('work_progress', $allowedTypes, true)) {
+          continue;
+        }
         $filenames = explode(',', (string) ($order[$field] ?? ''));
         foreach ($filenames as $filename) {
           $filename = trim($filename);
@@ -98,12 +144,41 @@ class WorkshopController extends Controller
 
           $url = $this->absoluteEvidenceUrl('assets/evidence/' . $orderId . '/' . $filename);
           if (!isset($seenUrls[$orderId][$url])) {
-            $evidenceByOrder[$orderId][] = $url;
+            preg_match('/^(\d{8}_\d{6})_/', $filename, $timestampMatch);
+            $legacyDate = isset($timestampMatch[1])
+              ? DateTimeImmutable::createFromFormat('!Ymd_His', $timestampMatch[1])
+              : false;
+            $createdAt = $legacyDate instanceof DateTimeImmutable
+              ? $legacyDate->format('Y-m-d H:i:s')
+              : null;
+            $evidenceByOrder[$orderId][] = [
+              'id' => null,
+              'url' => $url,
+              'evidence_type' => 'work_progress',
+              'type' => $field === 'images' ? 'photo' : 'video',
+              'created_at' => $createdAt,
+            ];
             $seenUrls[$orderId][$url] = true;
           }
         }
       }
     }
+
+    $typeOrder = array_flip(self::EVIDENCE_TYPES);
+    foreach ($evidenceByOrder as &$evidenceItems) {
+      usort($evidenceItems, static function (array $left, array $right) use ($typeOrder): int {
+        $typeComparison = $typeOrder[$left['evidence_type']] <=> $typeOrder[$right['evidence_type']];
+        if ($typeComparison !== 0) {
+          return $typeComparison;
+        }
+        $dateComparison = strcmp((string) ($left['created_at'] ?? ''), (string) ($right['created_at'] ?? ''));
+        if ($dateComparison !== 0) {
+          return $dateComparison;
+        }
+        return (int) ($left['id'] ?? 0) <=> (int) ($right['id'] ?? 0);
+      });
+    }
+    unset($evidenceItems);
 
     return $evidenceByOrder;
   }
@@ -111,11 +186,38 @@ class WorkshopController extends Controller
   private function addEvidenceUrls(array $orders, array $evidenceByOrder): array
   {
     foreach ($orders as &$order) {
-      $order['evidence'] = $evidenceByOrder[(int) $order['id']] ?? [];
+      $evidence = $evidenceByOrder[(int) $order['id']] ?? [];
+      $this->setVisibleEvidenceMediaFields($order, $evidence);
+      $order['evidence'] = $evidence;
     }
     unset($order);
 
     return $orders;
+  }
+
+  private function setVisibleEvidenceMediaFields(array &$order, array $evidence): void
+  {
+    $filenamesByField = ['images' => [], 'videos' => []];
+    foreach ($evidence as $item) {
+      $field = match ($item['type'] ?? null) {
+        'photo' => 'images',
+        'video' => 'videos',
+        default => null,
+      };
+      if ($field !== null) {
+        $path = parse_url((string) ($item['url'] ?? ''), PHP_URL_PATH);
+        $filename = is_string($path) ? basename($path) : '';
+        if ($filename !== '') {
+          $filenamesByField[$field][] = $filename;
+        }
+      }
+    }
+
+    foreach ($filenamesByField as $field => $filenames) {
+      if (array_key_exists($field, $order)) {
+        $order[$field] = $filenames === [] ? null : implode(',', $filenames);
+      }
+    }
   }
 
   private function dbError(Throwable $error): void
@@ -124,16 +226,160 @@ class WorkshopController extends Controller
     $this->jsonResponse([], 500, 'Database error');
   }
 
-  private function insertAlertBestEffort(mysqli $db, int $orderId, string $type, string $message): bool
+  private function assignedUserIds(mixed $value): array
+  {
+    if ($value === null || $value === '') {
+      return [];
+    }
+
+    if (is_string($value)) {
+      $decoded = json_decode($value, true);
+      if (json_last_error() === JSON_ERROR_NONE) {
+        $value = $decoded;
+      } elseif (preg_match('/^[1-9][0-9]*$/D', $value)) {
+        $value = [(int) $value];
+      } else {
+        $this->jsonResponse([], 422, 'assigned_user_id must be a JSON array of user IDs');
+      }
+    }
+
+    if (is_int($value)) {
+      $value = [$value];
+    }
+
+    if (!is_array($value) || array_values($value) !== $value) {
+      $this->jsonResponse([], 422, 'assigned_user_id must be a JSON array of user IDs');
+    }
+
+    $userIds = [];
+    foreach ($value as $userId) {
+      if (
+        (!is_int($userId) && !is_string($userId))
+        || !preg_match('/^[1-9][0-9]*$/D', (string) $userId)
+        || filter_var($userId, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]) === false
+      ) {
+        $this->jsonResponse([], 422, 'assigned_user_id must contain positive user IDs');
+      }
+      $userIds[] = (int) $userId;
+    }
+
+    if (count($userIds) !== count(array_unique($userIds))) {
+      $this->jsonResponse([], 422, 'assigned_user_id must not contain duplicate user IDs');
+    }
+
+    sort($userIds, SORT_NUMERIC);
+    return $userIds;
+  }
+
+  private function validateActiveMechanics(mysqli $db, array $userIds): array
+  {
+    if ($userIds === []) {
+      return [];
+    }
+
+    $placeholders = implode(', ', array_fill(0, count($userIds), '?'));
+    $stmt = $db->prepare(
+      "SELECT id, first_name, last_name
+       FROM users
+       WHERE active = 1 AND role IN ('mechanic', 'admin') AND id IN ({$placeholders})"
+    );
+    $types = str_repeat('i', count($userIds));
+    $bindParams = [$types];
+    foreach ($userIds as &$userId) {
+      $bindParams[] = &$userId;
+    }
+    unset($userId);
+    call_user_func_array([$stmt, 'bind_param'], $bindParams);
+    $stmt->execute();
+    $mechanics = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+    $stmt->close();
+    if (count($mechanics) !== count($userIds)) {
+      $this->jsonResponse([], 422, 'Every assigned_user_id must identify an active admin or mechanic');
+    }
+
+    return $mechanics;
+  }
+
+  private function authenticatedAlertActor(mysqli $db, array $user): string
+  {
+    $userId = (int) $user['id'];
+    $stmt = $db->prepare('SELECT first_name, last_name, role FROM users WHERE id = ? LIMIT 1');
+    $stmt->bind_param('i', $userId);
+    $stmt->execute();
+    $identity = $stmt->get_result()->fetch_assoc();
+    $stmt->close();
+    if (!$identity) {
+      $this->jsonResponse([], 401, 'Authenticated user no longer exists');
+    }
+
+    $actor = [
+      'id' => $userId,
+      'name' => trim((string) $identity['first_name'] . ' ' . (string) $identity['last_name']),
+      'role' => (string) $identity['role'],
+    ];
+    return json_encode($actor, JSON_THROW_ON_ERROR | JSON_INVALID_UTF8_SUBSTITUTE);
+  }
+
+  private function insertAlertBestEffort(
+    mysqli $db,
+    int $orderId,
+    string $type,
+    string $message,
+    ?array $assignedUserIds = null
+  ): bool
   {
     $message = preg_match('/^.{0,255}/us', $message, $matches) ? $matches[0] : substr($message, 0, 255);
+    $transactionStarted = false;
     try {
-      $stmt = $db->prepare('INSERT INTO alerts (order_id, type, message) VALUES (?, ?, ?)');
+      $db->begin_transaction();
+      $transactionStarted = true;
+      $stmt = $db->prepare('INSERT INTO alerts (order_id, type, message, targeted) VALUES (?, ?, ?, 1)');
       $stmt->bind_param('iss', $orderId, $type, $message);
       $stmt->execute();
+      $alertId = (int) $stmt->insert_id;
       $stmt->close();
+
+      if ($assignedUserIds === null) {
+        $assignmentStmt = $db->prepare('SELECT assigned_user_id FROM work_orders WHERE id = ? LIMIT 1');
+        $assignmentStmt->bind_param('i', $orderId);
+        $assignmentStmt->execute();
+        $assignment = $assignmentStmt->get_result()->fetch_assoc();
+        $assignmentStmt->close();
+        $assignedUserIds = $this->assignedUserIds($assignment['assigned_user_id'] ?? null);
+      }
+
+      $recipientCondition = $assignedUserIds === []
+        ? "u.role = 'admin'"
+        : "u.role = 'admin' OR (u.role = 'mechanic' AND u.id IN (" .
+          implode(', ', array_fill(0, count($assignedUserIds), '?')) . '))';
+      $recipientsStmt = $db->prepare(
+        "INSERT INTO alert_recipients (alert_id, user_id)
+         SELECT ?, u.id FROM users u
+         WHERE u.active = 1 AND ({$recipientCondition})"
+      );
+      $types = 'i' . str_repeat('i', count($assignedUserIds));
+      $bindParams = [$types, &$alertId];
+      foreach ($assignedUserIds as &$assignedUserId) {
+        $bindParams[] = &$assignedUserId;
+      }
+      unset($assignedUserId);
+      call_user_func_array([$recipientsStmt, 'bind_param'], $bindParams);
+      $recipientsStmt->execute();
+      $recipientCount = $recipientsStmt->affected_rows;
+      $recipientsStmt->close();
+      if ($recipientCount < 1) {
+        throw new RuntimeException("No active recipients for {$type} alert on order {$orderId}");
+      }
+
+      if (!$db->commit()) {
+        throw new RuntimeException("Could not commit {$type} alert and recipients for order {$orderId}");
+      }
+      $transactionStarted = false;
       return true;
     } catch (Throwable $error) {
+      if ($transactionStarted) {
+        $db->rollback();
+      }
       error_log("Could not create {$type} alert for order {$orderId}: " . $error->getMessage());
       return false;
     }
@@ -144,7 +390,18 @@ class WorkshopController extends Controller
     try {
       $existsStmt = $db->prepare(
         "SELECT 1 FROM alerts
-         WHERE order_id = ? AND type = 'budget_accepted' AND read_at IS NULL
+         WHERE order_id = ? AND type = 'budget_accepted'
+           AND (
+             (targeted = 0 AND read_at IS NULL)
+             OR (
+               targeted = 1
+               AND EXISTS (
+                 SELECT 1 FROM alert_recipients
+                 WHERE alert_recipients.alert_id = alerts.id
+                   AND alert_recipients.read_at IS NULL
+               )
+             )
+           )
          LIMIT 1"
       );
       $existsStmt->bind_param('i', $orderId);
@@ -338,6 +595,10 @@ class WorkshopController extends Controller
   {
     $databaseType = strtolower((string) $column['Type']);
 
+    if ($field === 'assigned_user_id' && $value !== null) {
+      return json_encode($this->assignedUserIds($value), JSON_THROW_ON_ERROR);
+    }
+
     if ($field === 'status' && $value !== null && !in_array($value, ['received', 'diagnosing', 'awaiting_approval', 'approved', 'in_progress', 'ready', 'delivered', 'cancelled'], true)) {
       $this->jsonResponse([], 422, 'Invalid order status');
     }
@@ -427,7 +688,12 @@ class WorkshopController extends Controller
     try {
       $columns = $this->getOrderColumnMetadata($db);
       $data = $this->normalizeOrderPayload($payload, $columns);
-      $required = ['customer_name', 'customer_phone', 'vehicle_plate', 'vehicle_make', 'vehicle_model', 'mileage', 'fuel_level', 'failure_description', 'checklist'];
+      $assignedMechanics = null;
+      if (isset($data['assigned_user_id'])) {
+        $assignedUserIds = $this->assignedUserIds($data['assigned_user_id']);
+        $assignedMechanics = $this->validateActiveMechanics($db, $assignedUserIds);
+      }
+      $required = ['customer_name', 'customer_phone', 'vehicle_plate', 'vehicle_make', 'vehicle_model', 'mileage', 'fuel_level', 'checklist'];
       foreach ($required as $field) {
         if (!array_key_exists($field, $data) || $data[$field] === null || $data[$field] === '') {
           $this->jsonResponse([], 422, "Missing field: {$field}");
@@ -477,14 +743,27 @@ class WorkshopController extends Controller
         throw new RuntimeException('Could not commit order creation and audit log');
       }
       $transactionStarted = false;
-      if (($user['role'] ?? '') !== 'admin') {
+      if (($user['role'] ?? '') === 'admin' && $assignedMechanics !== null && $assignedMechanics !== []) {
+        $mechanicNames = array_map(
+          static fn(array $mechanic): string => trim($mechanic['first_name'] . ' ' . $mechanic['last_name']),
+          $assignedMechanics
+        );
+        $this->insertAlertBestEffort(
+          $db,
+          $orderId,
+          'order_assigned',
+          "La orden {$data['vehicle_plate']} fue asignada a " . implode(', ', $mechanicNames) . '.',
+          array_column($assignedMechanics, 'id')
+        );
+      } elseif (($user['role'] ?? '') !== 'admin') {
         $customerName = (string) $data['customer_name'];
         $vehiclePlate = (string) $data['vehicle_plate'];
         $this->insertAlertBestEffort(
           $db,
           $orderId,
           'order_created',
-          "Nueva orden de {$customerName} ({$vehiclePlate})."
+          "Nueva orden de {$customerName} ({$vehiclePlate}).",
+          $assignedMechanics === null ? null : array_column($assignedMechanics, 'id')
         );
       }
       $this->jsonResponse(['id' => $orderId, 'token' => $token], 201, 'Order created');
@@ -590,8 +869,16 @@ class WorkshopController extends Controller
 
   public function uploadEvidence(): void
   {
-    $user = $this->user(['admin', 'mechanic']);
+    $user = $this->user(['admin', 'mechanic', 'reception']);
     $id = filter_var($this->params()['id'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+    $evidenceType = $_POST['evidence_type'] ?? null;
+    if (!is_string($evidenceType) || !in_array($evidenceType, self::EVIDENCE_TYPES, true)) {
+      $this->jsonResponse([], 422, 'Invalid evidence_type');
+    }
+    if (!in_array($evidenceType, $this->evidenceTypesForRole((string) ($user['role'] ?? '')), true)) {
+      $this->jsonResponse([], 403, 'Role cannot upload this evidence_type');
+    }
+
     $file = $_FILES['file'] ?? null;
     if (
       $id === false || !is_array($file) || ($file['error'] ?? null) !== UPLOAD_ERR_OK
@@ -641,8 +928,8 @@ class WorkshopController extends Controller
       $filenameColumn = $type === 'photo' ? 'images' : 'videos';
       $db->begin_transaction();
       $transactionStarted = true;
-      $stmt = $db->prepare('INSERT INTO order_evidence (order_id, type, file_url, uploaded_by) VALUES (?, ?, ?, ?)');
-      $stmt->bind_param('issi', $id, $type, $path, $user['id']);
+      $stmt = $db->prepare('INSERT INTO order_evidence (order_id, type, evidence_type, file_url, uploaded_by) VALUES (?, ?, ?, ?, ?)');
+      $stmt->bind_param('isssi', $id, $type, $evidenceType, $path, $user['id']);
       $stmt->execute();
       $filenameStmt = $db->prepare(
         "UPDATE work_orders
@@ -658,7 +945,11 @@ class WorkshopController extends Controller
         throw new RuntimeException('Could not commit evidence metadata');
       }
       $transactionStarted = false;
-      $this->jsonResponse(['id' => $stmt->insert_id, 'url' => $path], 201, 'Evidence uploaded');
+      $this->jsonResponse([
+        'id' => $stmt->insert_id,
+        'url' => $path,
+        'evidence_type' => $evidenceType,
+      ], 201, 'Evidence uploaded');
     } catch (InvalidArgumentException $error) {
       if ($transactionStarted) {
         $db->rollback();
@@ -682,6 +973,134 @@ class WorkshopController extends Controller
       }
       error_log($error->getMessage());
       $this->jsonResponse([], 500, 'Could not process or store evidence');
+    }
+  }
+
+  public function orderEvidence(): void
+  {
+    $user = $this->user(['admin', 'mechanic', 'reception']);
+    $id = filter_var($this->params()['id'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+    if ($id === false) {
+      $this->jsonResponse([], 422, 'Invalid order ID');
+    }
+
+    $roleTypes = $this->evidenceTypesForRole((string) ($user['role'] ?? ''));
+    $filterType = $_GET['type'] ?? null;
+    if ($filterType !== null && (!is_string($filterType) || !in_array($filterType, self::EVIDENCE_TYPES, true))) {
+      $this->jsonResponse([], 422, 'Invalid evidence type');
+    }
+    if ($filterType !== null && !in_array($filterType, $roleTypes, true)) {
+      $this->jsonResponse([], 403, 'Role cannot view this evidence_type');
+    }
+
+    $allowedTypes = $filterType === null ? $roleTypes : [$filterType];
+    if ($allowedTypes === []) {
+      $this->jsonResponse([], 403, 'Role cannot view evidence');
+    }
+
+    $db = DataBase::getConnection();
+    try {
+      $orderStmt = $db->prepare('SELECT id, images, videos FROM work_orders WHERE id = ? LIMIT 1');
+      $orderStmt->bind_param('i', $id);
+      $orderStmt->execute();
+      $order = $orderStmt->get_result()->fetch_assoc();
+      if (!$order) {
+        $this->jsonResponse([], 404, 'Order not found');
+      }
+      $orderStmt->close();
+
+      $evidenceByOrder = $this->evidenceUrlsByOrder($db, [$order], $allowedTypes);
+      $evidence = $evidenceByOrder[(int) $id] ?? [];
+      $this->jsonResponse($evidence, 200, 'success', count($evidence));
+    } catch (Throwable $error) {
+      $this->dbError($error);
+    }
+  }
+
+  public function deleteEvidence(): void
+  {
+    $this->user(['admin']);
+    $orderId = filter_var($this->params()['id'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+    $evidenceId = filter_var($this->params()['evidenceId'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+    if ($orderId === false || $evidenceId === false) {
+      $this->jsonResponse([], 422, 'Invalid order or evidence ID');
+    }
+
+    $db = DataBase::getConnection();
+    $transactionStarted = false;
+    try {
+      $db->begin_transaction();
+      $transactionStarted = true;
+      $stmt = $db->prepare(
+        'SELECT id, type, file_url FROM order_evidence WHERE id = ? AND order_id = ? FOR UPDATE'
+      );
+      $stmt->bind_param('ii', $evidenceId, $orderId);
+      $stmt->execute();
+      $evidence = $stmt->get_result()->fetch_assoc();
+      $stmt->close();
+      if (!$evidence) {
+        $db->rollback();
+        $transactionStarted = false;
+        $this->jsonResponse([], 404, 'Evidence not found');
+      }
+
+      $relativePath = (string) $evidence['file_url'];
+      $prefix = 'assets/evidence/' . $orderId . '/';
+      $filename = str_starts_with($relativePath, $prefix) ? substr($relativePath, strlen($prefix)) : '';
+      if (
+        $filename === ''
+        || basename($filename) !== $filename
+        || !preg_match('/^[A-Za-z0-9_-]+\.(?:jpg|mp4)$/D', $filename)
+      ) {
+        throw new UnexpectedValueException('Invalid evidence storage path');
+      }
+
+      $column = match ($this->evidenceMediaType($evidence['type'], $relativePath)) {
+        'photo' => 'images',
+        'video' => 'videos',
+        default => throw new UnexpectedValueException('Invalid evidence media type'),
+      };
+      $orderStmt = $db->prepare("SELECT `{$column}` FROM work_orders WHERE id = ? FOR UPDATE");
+      $orderStmt->bind_param('i', $orderId);
+      $orderStmt->execute();
+      $order = $orderStmt->get_result()->fetch_assoc();
+      $orderStmt->close();
+      if (!$order) {
+        $db->rollback();
+        $transactionStarted = false;
+        $this->jsonResponse([], 404, 'Order not found');
+      }
+
+      $filenames = array_values(array_filter(
+        array_map('trim', explode(',', (string) ($order[$column] ?? ''))),
+        static fn(string $current): bool => $current !== '' && $current !== $filename
+      ));
+      $filenameList = $filenames === [] ? null : implode(',', $filenames);
+      $updateStmt = $db->prepare("UPDATE work_orders SET `{$column}` = ? WHERE id = ?");
+      $updateStmt->bind_param('si', $filenameList, $orderId);
+      $updateStmt->execute();
+      $updateStmt->close();
+
+      $deleteStmt = $db->prepare('DELETE FROM order_evidence WHERE id = ? AND order_id = ?');
+      $deleteStmt->bind_param('ii', $evidenceId, $orderId);
+      $deleteStmt->execute();
+      $deleteStmt->close();
+      if (!$db->commit()) {
+        throw new RuntimeException('Could not commit evidence deletion');
+      }
+      $transactionStarted = false;
+
+      $filePath = __DIR__ . '/../../' . $relativePath;
+      if (is_file($filePath) && !@unlink($filePath)) {
+        error_log('Could not remove evidence file after deleting its database record: ' . $filePath);
+        $this->jsonResponse([], 500, 'Could not remove evidence file');
+      }
+      $this->jsonResponse(['id' => $evidenceId], 200, 'Evidence deleted');
+    } catch (Throwable $error) {
+      if ($transactionStarted) {
+        $db->rollback();
+      }
+      $this->dbError($error);
     }
   }
 
@@ -993,8 +1412,13 @@ class WorkshopController extends Controller
         }
         unset($item);
       }
-      $evidenceByOrder = $this->evidenceUrlsByOrder($db, [$order]);
+      $evidenceByOrder = $this->evidenceUrlsByOrder(
+        $db,
+        [$order],
+        $this->evidenceTypesForRole((string) ($user['role'] ?? ''))
+      );
       $evidence = $evidenceByOrder[(int) $id] ?? [];
+      $this->setVisibleEvidenceMediaFields($order, $evidence);
       $this->jsonResponse(['order' => $order, 'budget' => $items, 'evidence' => $evidence], 200, 'success', $total);
     } catch (Throwable $error) {
       $this->dbError($error);
@@ -1050,7 +1474,7 @@ class WorkshopController extends Controller
 
   public function sendOrderSummaryEmail(): void
   {
-    $this->user(['admin', 'mechanic']);
+    $user = $this->user(['admin', 'mechanic']);
 
     $pathId = filter_var($this->params()['id'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
     if ($pathId === false) {
@@ -1313,12 +1737,16 @@ class WorkshopController extends Controller
 
   public function listOrders(): void
   {
-    $this->user(['admin', 'mechanic']);
+    $user = $this->user(['admin', 'mechanic']);
     $db = DataBase::getConnection();
     try {
       $result = $db->query("SELECT * FROM work_orders WHERE status NOT IN ('cancelled', 'delivered') OR status IS NULL ORDER BY id DESC");
       $orders = $result->fetch_all(MYSQLI_ASSOC);
-      $evidenceByOrder = $this->evidenceUrlsByOrder($db, $orders);
+      $evidenceByOrder = $this->evidenceUrlsByOrder(
+        $db,
+        $orders,
+        $this->evidenceTypesForRole((string) ($user['role'] ?? ''))
+      );
       $this->jsonResponse(
         $this->addEvidenceUrls($orders, $evidenceByOrder),
         200,
@@ -1332,7 +1760,7 @@ class WorkshopController extends Controller
 
   public function listDeliveredOrders(): void
   {
-    $this->user(['admin', 'mechanic']);
+    $user = $this->user(['admin', 'mechanic']);
 
     $limitValue = $_GET['limit'] ?? '20';
     $offsetValue = $_GET['offset'] ?? '0';
@@ -1398,7 +1826,11 @@ class WorkshopController extends Controller
 
       $stmt->execute();
       $orders = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
-      $evidenceByOrder = $this->evidenceUrlsByOrder($db, $orders);
+      $evidenceByOrder = $this->evidenceUrlsByOrder(
+        $db,
+        $orders,
+        $this->evidenceTypesForRole((string) ($user['role'] ?? ''))
+      );
       $this->jsonResponse([
         'items' => $this->addEvidenceUrls($orders, $evidenceByOrder),
         'pagination' => [
@@ -1476,6 +1908,34 @@ class WorkshopController extends Controller
       }
 
       $alerts = [];
+      if (array_key_exists('assigned_user_id', $changes)) {
+        if (($user['role'] ?? '') !== 'admin') {
+          $db->rollback();
+          $transactionStarted = false;
+          $this->jsonResponse([], 403, 'Only admins can assign orders');
+        }
+        if ($data['assigned_user_id'] !== null) {
+          $assignedUserIds = $this->assignedUserIds($data['assigned_user_id']);
+          $assignedMechanics = $this->validateActiveMechanics($db, $assignedUserIds);
+          $mechanicNames = array_map(
+            static fn(array $mechanic): string => trim($mechanic['first_name'] . ' ' . $mechanic['last_name']),
+            $assignedMechanics
+          );
+          $alerts[] = [
+            'type' => 'order_assigned',
+            'message' => $mechanicNames === []
+              ? "Se quitaron las asignaciones de la orden {$oldOrder['vehicle_plate']}."
+              : "La orden {$oldOrder['vehicle_plate']} fue asignada a " . implode(', ', $mechanicNames) . '.',
+            'assigned_user_ids' => array_column($assignedMechanics, 'id'),
+          ];
+        } else {
+          $alerts[] = [
+            'type' => 'order_assigned',
+            'message' => "Se quitaron las asignaciones de la orden {$oldOrder['vehicle_plate']}.",
+            'assigned_user_ids' => [],
+          ];
+        }
+      }
       if (isset($changes['status'])) {
         $alerts[] = [
           'type' => 'order_status_changed',
@@ -1525,7 +1985,13 @@ class WorkshopController extends Controller
       }
       $transactionStarted = false;
       foreach ($alerts as $alert) {
-        $this->insertAlertBestEffort($db, $id, $alert['type'], $alert['message']);
+        $this->insertAlertBestEffort(
+          $db,
+          $id,
+          $alert['type'],
+          $alert['message'],
+          $alert['assigned_user_ids'] ?? null
+        );
       }
       if ($budgetAccepted) {
         $this->notifyAcceptedBudgetBestEffort($db, $id, (string) $oldOrder['vehicle_plate']);
@@ -1602,16 +2068,46 @@ class WorkshopController extends Controller
 
   public function alerts(): void
   {
-    $this->user(['admin']);
+    $user = $this->user();
+    $userId = filter_var($user['id'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+    if ($userId === false) {
+      $this->jsonResponse([], 401, 'Invalid authenticated user');
+    }
+    if (($_GET['unread'] ?? null) === '1' && ($_GET['read'] ?? null) === '1') {
+      $this->jsonResponse([], 422, 'Use either read or unread, not both');
+    }
+
     $db = DataBase::getConnection();
     try {
+      $isAdmin = ($user['role'] ?? '') === 'admin';
+      $where = $isAdmin
+        ? '(a.targeted = 0 OR ar.user_id IS NOT NULL)'
+        : '(a.targeted = 1 AND ar.user_id IS NOT NULL)';
+      $orderBy = 'a.created_at DESC, a.id DESC';
+      $limit = 100;
       if (($_GET['unread'] ?? null) === '1') {
-        $result = $db->query(
-          'SELECT * FROM alerts WHERE read_at IS NULL ORDER BY created_at DESC, id DESC LIMIT 50'
-        );
-      } else {
-        $result = $db->query('SELECT * FROM alerts ORDER BY created_at DESC LIMIT 100');
+        $where .= ' AND ((a.targeted = 1 AND ar.read_at IS NULL) OR (a.targeted = 0 AND a.read_at IS NULL))';
+        $limit = 50;
+      } elseif (($_GET['read'] ?? null) === '1') {
+        $where .= ' AND ((a.targeted = 1 AND ar.read_at IS NOT NULL) OR (a.targeted = 0 AND a.read_at IS NOT NULL))';
+        $orderBy = 'CASE WHEN a.targeted = 1 THEN ar.read_at ELSE a.read_at END DESC, a.id DESC';
+        $limit = 50;
       }
+
+      $stmt = $db->prepare(
+        "SELECT a.id, a.order_id, a.type, a.message,
+                CASE WHEN a.targeted = 1 THEN ar.read_at ELSE a.read_at END AS read_at,
+                CASE WHEN a.targeted = 1 THEN ar.updated_by ELSE a.updated_by END AS updated_by,
+                a.created_at
+         FROM alerts a
+         LEFT JOIN alert_recipients ar ON ar.alert_id = a.id AND ar.user_id = ?
+         WHERE {$where}
+         ORDER BY {$orderBy}
+         LIMIT {$limit}"
+      );
+      $stmt->bind_param('i', $userId);
+      $stmt->execute();
+      $result = $stmt->get_result();
       $this->jsonResponse($result->fetch_all(MYSQLI_ASSOC), 200, 'success', $result->num_rows);
     } catch (Throwable $error) {
       $this->dbError($error);
@@ -1620,7 +2116,11 @@ class WorkshopController extends Controller
 
   public function updateAlertRead(): void
   {
-    $this->user(['admin']);
+    $user = $this->user();
+    $userId = filter_var($user['id'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+    if ($userId === false) {
+      $this->jsonResponse([], 401, 'Invalid authenticated user');
+    }
     $data = $this->getBody();
     if (!is_array($data) || !array_key_exists('id', $data)) {
       $this->jsonResponse([], 422, 'Alert ID is required');
@@ -1630,29 +2130,78 @@ class WorkshopController extends Controller
     if (
       (!is_int($rawId) && !is_string($rawId))
       || !preg_match('/^[0-9]+$/D', (string) $rawId)
-      || filter_var($rawId, FILTER_VALIDATE_INT) === false
+      || filter_var($rawId, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]) === false
     ) {
       $this->jsonResponse([], 422, 'Alert ID must be numeric');
     }
 
     $id = (int) $rawId;
-    unset($data['read_at']);
-    $extraFields = array_diff(array_keys($data), ['id']);
+    $extraFields = array_diff(array_keys($data), ['id', 'read_at', 'updated_by']);
     if ($extraFields !== []) {
-      require_once __DIR__ . '/../services/patch.php';
-      patchData('alerts', $data);
-      return;
+      $this->jsonResponse([], 422, 'Only id, read_at, and updated_by are allowed');
+    }
+
+    if (array_key_exists('updated_by', $data)) {
+      if (!is_string($data['updated_by']) || $data['updated_by'] === '') {
+        $this->jsonResponse([], 422, 'updated_by must be a non-empty JSON string');
+      }
+      $this->auditActor($data['updated_by'], $user);
     }
 
     $db = DataBase::getConnection();
     try {
-      $updateStmt = $db->prepare('UPDATE alerts SET read_at = NOW() WHERE id = ? AND read_at IS NULL');
-      $updateStmt->bind_param('i', $id);
-      $updateStmt->execute();
-      $updateStmt->close();
+      $authenticatedActor = $this->authenticatedAlertActor($db, $user);
+      $alertStmt = $db->prepare('SELECT targeted FROM alerts WHERE id = ? LIMIT 1');
+      $alertStmt->bind_param('i', $id);
+      $alertStmt->execute();
+      $alert = $alertStmt->get_result()->fetch_assoc();
+      $alertStmt->close();
+      if (!$alert) {
+        $this->jsonResponse([], 404, 'Alert not found');
+      }
 
-      $selectStmt = $db->prepare('SELECT * FROM alerts WHERE id = ? LIMIT 1');
-      $selectStmt->bind_param('i', $id);
+      if ((int) $alert['targeted'] === 1) {
+        $updateStmt = $db->prepare(
+          'UPDATE alert_recipients
+           SET read_at = COALESCE(read_at, NOW()), updated_by = COALESCE(updated_by, ?)
+           WHERE alert_id = ? AND user_id = ?'
+        );
+        $updateStmt->bind_param('sii', $authenticatedActor, $id, $userId);
+        $updateStmt->execute();
+        $updateStmt->close();
+
+        $recipientStmt = $db->prepare(
+          'SELECT 1 FROM alert_recipients WHERE alert_id = ? AND user_id = ? LIMIT 1'
+        );
+        $recipientStmt->bind_param('ii', $id, $userId);
+        $recipientStmt->execute();
+        $isRecipient = (bool) $recipientStmt->get_result()->fetch_row();
+        $recipientStmt->close();
+        if (!$isRecipient) {
+          $this->jsonResponse([], 404, 'Alert not found');
+        }
+      } else {
+        if (($user['role'] ?? '') !== 'admin') {
+          $this->jsonResponse([], 403, 'Administrator role required for legacy alerts');
+        }
+        $updateStmt = $db->prepare(
+          'UPDATE alerts SET read_at = COALESCE(read_at, NOW()), updated_by = COALESCE(updated_by, ?) WHERE id = ?'
+        );
+        $updateStmt->bind_param('si', $authenticatedActor, $id);
+        $updateStmt->execute();
+        $updateStmt->close();
+      }
+
+      $selectStmt = $db->prepare(
+        'SELECT a.id, a.order_id, a.type, a.message,
+                CASE WHEN a.targeted = 1 THEN ar.read_at ELSE a.read_at END AS read_at,
+                CASE WHEN a.targeted = 1 THEN ar.updated_by ELSE a.updated_by END AS updated_by,
+                a.created_at
+         FROM alerts a
+         LEFT JOIN alert_recipients ar ON ar.alert_id = a.id AND ar.user_id = ?
+         WHERE a.id = ? LIMIT 1'
+      );
+      $selectStmt->bind_param('ii', $userId, $id);
       $selectStmt->execute();
       $alert = $selectStmt->get_result()->fetch_assoc();
       $selectStmt->close();
@@ -1668,20 +2217,55 @@ class WorkshopController extends Controller
 
   public function readAllAlerts(): void
   {
-    $this->user(['admin']);
+    $user = $this->user();
+    $userId = filter_var($user['id'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+    if ($userId === false) {
+      $this->jsonResponse([], 401, 'Invalid authenticated user');
+    }
     $data = $this->getBody();
-    if ($data !== null && (!is_array($data) || $data !== [])) {
-      $this->jsonResponse([], 422, 'Request body must be empty');
+    if ($data !== null && (!is_array($data) || array_diff(array_keys($data), ['updated_by']) !== [])) {
+      $this->jsonResponse([], 422, 'Only updated_by is allowed');
+    }
+    if (isset($data['updated_by']) && !is_string($data['updated_by'])) {
+      $this->jsonResponse([], 422, 'updated_by must be a JSON string');
     }
 
     $db = DataBase::getConnection();
+    $transactionStarted = false;
     try {
-      $stmt = $db->prepare('UPDATE alerts SET read_at = NOW() WHERE read_at IS NULL');
+      $authenticatedActor = $this->authenticatedAlertActor($db, $user);
+      $db->begin_transaction();
+      $transactionStarted = true;
+      $stmt = $db->prepare(
+        'UPDATE alert_recipients
+         SET read_at = NOW(), updated_by = COALESCE(updated_by, ?)
+         WHERE user_id = ? AND read_at IS NULL'
+      );
+      $stmt->bind_param('si', $authenticatedActor, $userId);
       $stmt->execute();
       $updated = $stmt->affected_rows;
       $stmt->close();
+
+      if (($user['role'] ?? '') === 'admin') {
+        $legacyStmt = $db->prepare(
+          'UPDATE alerts
+           SET read_at = NOW(), updated_by = COALESCE(updated_by, ?)
+           WHERE targeted = 0 AND read_at IS NULL'
+        );
+        $legacyStmt->bind_param('s', $authenticatedActor);
+        $legacyStmt->execute();
+        $updated += $legacyStmt->affected_rows;
+        $legacyStmt->close();
+      }
+      if (!$db->commit()) {
+        throw new RuntimeException('Could not commit alert read receipts');
+      }
+      $transactionStarted = false;
       $this->jsonResponse(['updated' => $updated], 200, 'success');
     } catch (Throwable $error) {
+      if ($transactionStarted) {
+        $db->rollback();
+      }
       $this->dbError($error);
     }
   }

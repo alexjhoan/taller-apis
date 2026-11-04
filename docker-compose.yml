@@ -1,0 +1,42 @@
+version: "3.8"
+
+services:
+  mariadb:
+    image: mariadb:10
+    container_name: proyecto_php_db
+    restart: always
+    environment:
+      MYSQL_ROOT_PASSWORD: tu_password_root_segura
+      MYSQL_DATABASE: nombre_base_datos
+      MYSQL_USER: usuario_php
+      MYSQL_PASSWORD: tu_password_usuario
+    ports:
+      - "3306:3306" # Mapeado para que te conectes desde DBeaver
+    volumes:
+      - mariadb_data:/var/lib/mysql
+
+  php_backend:
+    build: ./backend
+    container_name: proyecto_php_backend
+    restart: always
+    ports:
+      - "8080:80" # Puerto expuesto en el VPS para la API de PHP
+    environment:
+      - DB_HOST=mariadb
+      - DB_NAME=nombre_base_datos
+      - DB_USER=usuario_php
+      - DB_PASSWORD=tu_password_usuario
+    depends_on:
+      - mariadb
+
+  next_frontend:
+    build: ./frontend
+    container_name: proyecto_next_frontend
+    restart: always
+    ports:
+      - "3000:3000" # Puerto del frontend
+    depends_on:
+      - php_backend
+
+volumes:
+  mariadb_data:

@@ -97,6 +97,9 @@ class Router
     // Limpieza de caracteres extraños para el nombre de la tabla
     // $table = preg_replace('/[^a-zA-Z0-9__-]/', '', $resource);
     $table = $resource;
+    if (in_array(strtolower($table), ['alerts', 'alert_recipients'], true)) {
+      $this->sendResponse(404, 'Recurso no encontrado');
+    }
 
     // Mapeo dinámico hacia los servicios automáticos por método HTTP
     switch ($method) {

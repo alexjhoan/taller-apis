@@ -153,7 +153,7 @@ Ejemplo para `work_orders`:
   "customer_name": "Juan Perez",
   "customer_phone": "+573001112233",
   "customer_email": "juan@example.com",
-  "assigned_user_id": 3,
+  "assigned_user_id": "[2,4]",
   "vehicle_plate": "ABC123",
   "vehicle_make": "Toyota",
   "vehicle_model": "Corolla",
@@ -222,20 +222,43 @@ Genera automáticamente `public_token` de 48 caracteres hexadecimales.
 }
 ```
 
-Campos obligatorios:
+Campos obligatorios: `customer_name`, `customer_phone`, `vehicle_plate`, `vehicle_make`,
+`vehicle_model`, `mileage`, `fuel_level`, `failure_description` y `checklist`.
 
+`assigned_user_id` es opcional y admite un arreglo de IDs, una cadena JSON como `"[2,4]"`,
+un ID entero individual por compatibilidad o `null`. Cada ID debe corresponder a un usuario
+activo cuyo rol sea `admin` o `mechanic`; no se permiten IDs repetidos. Esto permite que
+admins de talleres pequeños también sean asignados como responsables de trabajo. Si un
+admin crea la orden con usuarios asignados, el backend genera `order_assigned` para todos
+los admins activos y cada usuario asignado.
+Los cambios posteriores solo los puede hacer un admin y producen la misma alerta. La
+asignación define la audiencia; el frontend no envía una lista de destinatarios de alertas.
+
+Ejemplo de PATCH de asignación:
+
+```json
+{
+  "id": 25,
+  "assigned_user_id": "[2,4]"
+}
 ```
 
-`assigned_user_id` es opcional y admite un ID entero o `null`. El backend consulta `SHOW COLUMNS FROM work_orders` y arma dinámicamente los campos y valores del INSERT/PATCH según las columnas existentes; al agregar o cambiar columnas compatibles no se necesita agregar una lista de campos en el controlador. La base de datos debe tener el nombre exacto de cada clave enviada. `images` y `videos` son columnas administradas por la carga de evidencias y no se pueden escribir mediante POST/PATCH de órdenes.
-customer_name
-customer_phone
-vehicle_plate
-vehicle_make
-vehicle_model
-mileage
-fuel_level
-failure_description
+También se acepta un arreglo JSON nativo:
+
+```json
+{
+  "id": 25,
+  "assigned_user_id": [2, 4]
+}
 ```
+
+`assigned_user_id` se almacena como JSON serializado en la columna, que debe ser tipo
+`TEXT`; al leer una orden, el frontend recibirá la cadena, por ejemplo `"[2,4]"`.
+
+El backend consulta `SHOW COLUMNS FROM work_orders` y arma dinámicamente los campos y
+valores del INSERT/PATCH según las columnas existentes. `images` y `videos` son columnas
+administradas por la carga de evidencias y no se pueden escribir mediante POST/PATCH de
+órdenes.
 
 #### Respuesta `201`
 
@@ -285,8 +308,13 @@ Roles: `admin`, `mechanic`.
     },
     "budget": [],
     "evidence": [
-      "https://api.example.test/taller-apis/assets/evidence/25/20261013_180000_abcd1234.jpg",
-      "https://api.example.test/taller-apis/assets/evidence/25/20261013_180100_efgh5678.mp4"
+      {
+        "id": 10,
+        "url": "https://api.example.test/taller-apis/assets/evidence/25/20261013_180000_abcd1234.jpg",
+        "evidence_type": "reception",
+        "type": "photo",
+        "created_at": "2026-10-13 18:00:00"
+      }
     ]
   },
   "statusText": "success",
@@ -295,7 +323,7 @@ Roles: `admin`, `mechanic`.
 ```
 
 Cuando el usuario es `mechanic` y `mechanic_cost_visibility` vale `0`, el backend omite `unit_price` y `supplier_cost` de cada ítem.
-`evidence` es un arreglo de strings con las URLs absolutas de todas las imágenes y videos procesados, ordenadas por `id` ascendente cuando tienen registro en `order_evidence`. También se incluyen archivos encontrados en `work_orders.images` y `work_orders.videos` que todavía no tengan registro de evidencia. El mismo campo se incluye por cada orden en `GET /api/orders` y `GET /api/orders/delivered`; el GET público por token también lo devuelve dentro de `body.evidence`.
+`evidence` contiene objetos con `id`, `url`, `evidence_type`, `type` y `created_at`, ordenados por categoría (`reception`, `work_progress`, `final`) y luego por fecha ascendente. Los roles `admin` ven todos los tipos; `mechanic` ve recepción y progreso; `reception` ve solo recepción. Los archivos legacy sin fila en `order_evidence` se clasifican como `work_progress`. El mismo campo se incluye por orden en `GET /api/orders` y `GET /api/orders/delivered`; el portal público recibe todas las categorías.
 
 ### GET `/api/orders/{id}/send-email`
 
@@ -379,14 +407,31 @@ Tabla: `order_evidence`.
 
 ### POST `/api/orders/{id}/evidence`
 
-Roles: `admin`, `mechanic`.
+Roles: `admin`, `mechanic`, `reception`.
 
 Usar `multipart/form-data`, no JSON. Enviar un solo archivo por solicitud y esperar la respuesta antes de enviar el siguiente para preservar el orden en que fueron seleccionados.
 
-Campo requerido:
+Campos requeridos:
 
 ```text
 file
+evidence_type
+```
+
+Valores permitidos de `evidence_type`:
+
+```text
+reception
+work_progress
+final
+```
+
+Permisos de carga:
+
+```text
+reception: reception
+mechanic: work_progress
+admin: reception, work_progress, final
 ```
 
 Tipos permitidos:
@@ -405,7 +450,7 @@ Las imágenes JPEG, PNG y WebP se normalizan a JPG, se limitan a un máximo de `
 
 Los archivos procesados se guardan bajo `assets/evidence/{id_order}/` con un nombre de fecha/hora del servidor (`YYYYMMDD_HHMMSS`) y un sufijo aleatorio para evitar colisiones en el mismo segundo. El servidor requiere FFmpeg accesible por PATH o mediante la variable de entorno `FFMPEG_BINARY`.
 
-Además de registrar la ruta y tipo en `order_evidence`, cada carga agrega el nombre generado (sin la ruta) a `work_orders.images` para imágenes o `work_orders.videos` para videos. Los nombres se concatenan separados por comas y en orden de carga. Para reconstruir la ruta se combina el nombre con `assets/evidence/{id_order}/`. Ejecuta la migración `database/migrations/20261013_add_order_media_names.sql` antes de habilitar estas cargas.
+Además de registrar la ruta, tipo de medio y `evidence_type` en `order_evidence`, cada carga agrega el nombre generado (sin la ruta) a `work_orders.images` para imágenes o `work_orders.videos` para videos. Los nombres se concatenan separados por comas y en orden de carga. Para reconstruir la ruta se combina el nombre con `assets/evidence/{id_order}/`. Ejecuta las migraciones `database/migrations/20261013_add_order_media_names.sql` y `database/migrations/20261027_add_order_evidence_type.sql` antes de habilitar estas cargas.
 
 #### Respuesta `201`
 
@@ -414,7 +459,8 @@ Además de registrar la ruta y tipo en `order_evidence`, cada carga agrega el no
   "status": 201,
   "body": {
     "id": 10,
-    "url": "assets/evidence/25/20261010_114759_a1b2c3d4.mp4"
+    "url": "assets/evidence/25/20261010_114759_a1b2c3d4.mp4",
+    "evidence_type": "work_progress"
   },
   "statusText": "Evidence uploaded"
 }
@@ -426,14 +472,40 @@ Campos relacionados de `order_evidence`:
 id
 order_id
 type
+evidence_type
 file_url
 uploaded_by
 created_at
 ```
 
-En `work_orders`, `images` y `videos` son columnas de texto nullable que contienen los nombres de archivos procesados separados por comas. Las respuestas GET de órdenes incluyen estos campos dentro de `order`. Para el frontend, `evidence` expone únicamente las URLs absolutas (strings); `order_evidence` conserva internamente las rutas y metadatos de cada archivo.
+### GET `/api/orders/{id}/evidence`
 
-El portal público devuelve `evidence` en orden de carga ascendente por `id`.
+Roles: `admin`, `mechanic`, `reception`.
+
+El parámetro opcional `?type=reception|work_progress|final` filtra una categoría; si se solicita un tipo no visible para el rol autenticado, responde `403`. Sin parámetro devuelve todos los tipos permitidos para ese rol. La respuesta incluye `evidence_type` en cada objeto y ordena por categoría (`reception`, `work_progress`, `final`) y fecha ascendente.
+
+```json
+{
+  "status": 200,
+  "body": [
+    {
+      "id": 10,
+      "url": "https://api.example.test/taller-apis/assets/evidence/25/20261013_180000_abcd1234.jpg",
+      "evidence_type": "reception",
+      "type": "photo",
+      "created_at": "2026-10-13 18:00:00"
+    }
+  ],
+  "statusText": "success",
+  "total": 1
+}
+```
+
+### DELETE `/api/orders/{id}/evidence/{evidenceId}`
+
+Solo `admin`. Elimina el registro y archivo asociados, y retira el nombre del archivo de `work_orders.images` o `work_orders.videos`. Roles distintos de admin reciben `403`.
+
+En `work_orders`, `images` y `videos` son columnas de texto nullable que contienen los nombres de archivos procesados separados por comas. Las listas de órdenes autenticadas también aplican el filtro de categorías por rol a estos campos. El portal público devuelve todas las categorías, agrupadas por tipo y con fecha ascendente dentro de cada grupo.
 
 ## 6. Presupuestos
 
@@ -566,8 +638,13 @@ No requiere JWT. El acceso se realiza mediante `work_orders.public_token`.
       }
     ],
     "evidence": [
-      "https://api.example.test/taller-apis/assets/evidence/25/20261013_180000_abcd1234.jpg",
-      "https://api.example.test/taller-apis/assets/evidence/25/20261013_180100_efgh5678.mp4"
+      {
+        "id": 10,
+        "url": "https://api.example.test/taller-apis/assets/evidence/25/20261013_180000_abcd1234.jpg",
+        "evidence_type": "reception",
+        "type": "photo",
+        "created_at": "2026-10-13 18:00:00"
+      }
     ]
   },
   "statusText": "success",
@@ -575,7 +652,7 @@ No requiere JWT. El acceso se realiza mediante `work_orders.public_token`.
 }
 ```
 
-`order` se obtiene dinámicamente con todas las columnas actuales de `work_orders`, incluyendo columnas nuevas añadidas a la base. Solo se omiten `public_token` (credencial de acceso del portal) y `created_by` (dato interno de autoría). `budget` contiene las partidas y sus IDs necesarios para presentar las opciones al cliente y enviar decisiones con `POST /api/public/order/{token}/decision`. `evidence` contiene un arreglo de strings con las URLs absolutas de todas las fotos/videos procesados de la orden, en orden de carga.
+`order` se obtiene dinámicamente con todas las columnas actuales de `work_orders`, incluyendo columnas nuevas añadidas a la base. Solo se omiten `public_token` (credencial de acceso del portal) y `created_by` (dato interno de autoría). `budget` contiene las partidas y sus IDs necesarios para presentar las opciones al cliente y enviar decisiones con `POST /api/public/order/{token}/decision`. `evidence` contiene objetos con la URL absoluta y `evidence_type`; el cliente ve todas las categorías agrupadas por tipo y con fecha ascendente dentro de cada grupo.
 
 ### PATCH `/api/public/order/{token}`
 
@@ -660,15 +737,24 @@ rejected
 
 `updated_count` indica cuántas partidas cambiaron. `notified` es `false` cuando todas ya tenían la decisión solicitada.
 
-## 8. Alertas del administrador
+## 8. Alertas
 
 ### GET `/api/alerts`
 
-Rol: `admin`.
+Disponible para cualquier usuario autenticado. Sin parámetros, devuelve hasta 100 alertas
+visibles para ese usuario. Las alertas nuevas solo se entregan a los admins activos y al
+mecánico o admin activo asignado a la orden. El servidor obtiene la identidad del token Bearer; no
+se debe enviar `user_id` ni una lista de usuarios en la query.
 
-Sin parámetros, conserva la lista actual de hasta 100 alertas. Agrega `?unread=1` para
-recibir solo alertas pendientes (`read_at IS NULL`), ordenadas por fecha e ID descendentes,
-con un máximo de 50.
+Agrega `?unread=1` para recibir pendientes para el usuario autenticado, ordenadas por fecha
+e ID descendentes, con un máximo de 50. Agrega `?read=1` para recibir las leídas por ese
+usuario, ordenadas por `read_at DESC` e ID descendente, con un máximo de 50. Usa `read` o
+`unread`, no ambos a la vez. Las alertas anteriores a la migración conservan temporalmente
+su `read_at` global, pero solo los admins pueden verlas; los mecánicos solo reciben alertas
+que tengan un recibo dirigido a su usuario.
+
+No usar `POST /api/alerts`: la creación es interna del backend para que los destinatarios
+se resuelvan usando la asignación confiable de la orden. El endpoint responde `405`.
 
 #### Respuesta `200`
 
@@ -682,6 +768,7 @@ con un máximo de 50.
       "type": "customer_decision",
       "message": "El cliente actualizo la decision del presupuesto",
       "read_at": null,
+      "updated_by": null,
       "created_at": "2026-10-23 09:41:00"
     }
   ],
@@ -691,22 +778,43 @@ con un máximo de 50.
 
 ### PATCH `/api/alerts`
 
-Rol: `admin`. El payload `{ "id": 7 }` marca la alerta como leída y devuelve la fila
-actualizada. El backend asigna `read_at`; el cliente no debe enviar ese timestamp. Si ya
-estaba leída, la misma fila se devuelve sin cambiar su fecha. Un `read_at` recibido en el
-payload se ignora. Los payloads genéricos existentes con otros campos siguen usando el
-PATCH dinámico de `alerts`.
+El payload `{ "id": 7 }` marca la alerta como leída para el usuario autenticado y devuelve
+la fila con el `read_at` correspondiente a ese usuario. No enviar `user_id`: el backend lo
+obtiene del token. El cliente no debe enviar `read_at`; se acepta por compatibilidad y se
+ignora. `updated_by` también se acepta por compatibilidad y puede omitirse. Si se envía, su ID debe
+coincidir con el token; el backend guarda la identidad normalizada consultada desde `users`.
+La respuesta incluye `updated_by` para identificar al lector. No se admiten otros campos.
+
+Para una alerta nueva, únicamente uno de sus destinatarios puede marcarla como leída y la
+lectura no afecta a los demás. Las alertas históricas sin destinatarios mantienen
+temporalmente la lectura global; solo un admin puede marcarlas durante esta transición.
+Si el ID no existe o el usuario no es destinatario, la API responde `404`.
 
 ```json
-{ "id": 7 }
+{
+  "id": 7
+}
 ```
 
-Respuestas: `404` si la alerta no existe, `422` si falta el ID o no es numérico.
+Respuesta `403` si un usuario que no es admin intenta marcar una alerta histórica global,
+o si el ID de `updated_by` no coincide con el usuario autenticado. Respuesta `422` si falta
+el ID, no es numérico, `updated_by` no es una cadena JSON válida o el payload incluye
+campos no admitidos.
 
 ### POST `/api/alerts/read-all`
 
-Rol: `admin`. Acepta cuerpo vacío o `{}`; marca todas las alertas pendientes y devuelve
-cuántas filas cambiaron. Una segunda llamada sin nuevas alertas devuelve `updated: 0`.
+Disponible para cualquier usuario autenticado. Acepta cuerpo vacío, `{}` o `updated_by`
+como una cadena JSON serializada por compatibilidad; el backend ignora `updated_by`.
+Marca las alertas nuevas destinadas a ese usuario. Si el usuario es admin, también marca
+las alertas históricas globales pendientes, que es el comportamiento temporal anterior.
+Devuelve la cantidad de recibos/alertas cambiados. Una segunda llamada sin nuevas alertas
+devuelve `updated: 0`. No se admiten otros campos.
+
+```json
+{
+  "updated_by": "{\"id\":2,\"firstName\":\"admin\",\"lastName\":\"last_name\",\"role\":\"admin\"}"
+}
+```
 
 ```json
 {
@@ -724,18 +832,29 @@ order_id
 type
 message
 read_at
+updated_by
 created_at
 ```
 
-Las alertas se comparten entre administradores; no se crean tablas ni columnas nuevas.
-Los tipos generados incluyen `order_created`, `order_status_changed`, `part_requested`,
-`budget_accepted` y `budget_rejected`. Las filas históricas `customer_decision` siguen
+`read_at` refleja la lectura del usuario autenticado para alertas nuevas; para alertas
+históricas sigue siendo global durante la transición. `updated_by` se guarda por recibo
+individual en las alertas nuevas y sigue en la fila global para las históricas. Las nuevas
+alertas se comparten entre admins activos y se entregan a los
+admins/mecánicos activos asignados a la orden, si existen; usuarios no asignados con rol
+mechanic no pueden verlas.
+En recibos creados antes de agregar `alert_recipients.updated_by`, el campo puede ser
+`null` hasta que ese usuario vuelva a marcar la alerta como leída; no se puede reconstruir
+quién leyó previamente un aviso compartido.
+Los tipos generados incluyen `order_created`, `order_assigned`, `order_status_changed`,
+`part_requested`, `budget_accepted` y `budget_rejected`. Las filas históricas `customer_decision` siguen
 siendo válidas. Un error al guardar una alerta se registra en el log, pero no revierte la
 operación de la orden.
 
 Reglas de emisión:
 
-- Una orden creada por `mechanic` produce `order_created`; una creada por `admin` no.
+- Una orden creada por `mechanic` produce `order_created`.
+- Una orden creada por `admin` con uno o varios mecánicos activos asignados, o cuya asignación cambia
+  por un PATCH de admin, produce `order_assigned`; una orden admin sin asignación no lo hace.
 - Una transición real de estado produce `order_status_changed`.
 - Un repuesto nuevo con `requestedByTechnician: true` y `approvalStatus: "pending"`
   produce `part_requested`; mantenerlo pendiente en ediciones posteriores no repite la alerta.
@@ -749,7 +868,7 @@ Reglas de emisión:
 #### Ejemplos `curl`
 
 ```sh
-# Lista de pendientes para la campana (solo admin).
+# Lista las alertas pendientes visibles para el usuario autenticado.
 curl -i "$BASE_URL/api/alerts?unread=1" \
   -H "Authorization: Bearer $ADMIN_TOKEN"
 
@@ -769,13 +888,13 @@ curl -i -X PATCH "$BASE_URL/api/alerts" \
   -H "Content-Type: application/json" \
   -d '{"id":7,"read_at":"2000-01-01 00:00:00"}'
 
-# Marca todas las pendientes; repetir devuelve updated: 0.
+# Marca todas las alertas visibles del usuario; repetir devuelve updated: 0.
 curl -i -X POST "$BASE_URL/api/alerts/read-all" \
   -H "Authorization: Bearer $ADMIN_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{}'
 
-# Un usuario autenticado con rol mechanic debe recibir 403 en estas rutas.
+# Los mechanics pueden listar y marcar las alertas nuevas destinadas a ellos.
 curl -i "$BASE_URL/api/alerts?unread=1" \
   -H "Authorization: Bearer $MECHANIC_TOKEN"
 curl -i -X PATCH "$BASE_URL/api/alerts" \
@@ -798,7 +917,8 @@ curl -i -X PATCH "$BASE_URL/api/alerts" \
   -d '{"id":999999999}'
 curl -i "$BASE_URL/api/alerts?unread=1"
 
-# Crear una orden como mechanic produce order_created; como admin no produce alerta.
+# Crear una orden como mechanic produce order_created; como admin, incluir
+# assigned_user_id con IDs de usuarios activos admin/mechanic para generar order_assigned.
 curl -i -X POST "$BASE_URL/api/orders" \
   -H "Authorization: Bearer $MECHANIC_TOKEN" \
   -H "Content-Type: application/json" \
@@ -908,6 +1028,7 @@ updated_at
 id
 order_id
 type
+evidence_type
 file_url
 uploaded_by
 created_at
@@ -943,6 +1064,7 @@ order_id
 type
 message
 read_at
+updated_by
 created_at
 ```
 

@@ -35,7 +35,7 @@ CREATE TABLE IF NOT EXISTS work_orders (
   images TEXT NULL,
   videos TEXT NULL,
   status VARCHAR(40) NULL,
-  assigned_user_id INT NULL,
+  assigned_user_id TEXT NULL,
   started_at DATETIME NULL,
   finished_at DATETIME NULL,
   withdrawal_comment TEXT NULL,
@@ -51,11 +51,13 @@ CREATE TABLE IF NOT EXISTS order_evidence (
   id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   order_id INT UNSIGNED NOT NULL,
   type VARCHAR(40) NULL,
+  evidence_type VARCHAR(20) NOT NULL DEFAULT 'work_progress',
   file_url VARCHAR(500) NOT NULL,
   uploaded_by INT UNSIGNED NOT NULL,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT fk_evidence_order FOREIGN KEY (order_id) REFERENCES work_orders(id) ON DELETE CASCADE,
-  CONSTRAINT fk_evidence_user FOREIGN KEY (uploaded_by) REFERENCES users(id)
+  CONSTRAINT fk_evidence_user FOREIGN KEY (uploaded_by) REFERENCES users(id),
+  INDEX idx_order_evidence_type (order_id, evidence_type)
 ) ENGINE=InnoDB;
 
 CREATE TABLE IF NOT EXISTS budget_items (
@@ -85,9 +87,22 @@ CREATE TABLE IF NOT EXISTS alerts (
   type VARCHAR(80) NOT NULL,
   message VARCHAR(500) NOT NULL,
   read_at DATETIME NULL,
+  updated_by TEXT NULL,
+  targeted TINYINT(1) NOT NULL DEFAULT 0,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   CONSTRAINT fk_alert_order FOREIGN KEY (order_id) REFERENCES work_orders(id) ON DELETE CASCADE,
   INDEX idx_alerts_unread (read_at, created_at)
+) ENGINE=InnoDB;
+
+CREATE TABLE IF NOT EXISTS alert_recipients (
+  alert_id BIGINT UNSIGNED NOT NULL,
+  user_id INT UNSIGNED NOT NULL,
+  read_at DATETIME NULL,
+  updated_by TEXT NULL,
+  PRIMARY KEY (alert_id, user_id),
+  INDEX idx_alert_recipients_user_read (user_id, read_at, alert_id),
+  CONSTRAINT fk_alert_recipients_alert FOREIGN KEY (alert_id) REFERENCES alerts(id) ON DELETE CASCADE,
+  CONSTRAINT fk_alert_recipients_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB;
 
 -- Generar un hash con password_hash() y reemplazar este valor antes de usar en producción.
