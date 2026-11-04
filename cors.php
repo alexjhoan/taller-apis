@@ -2,6 +2,7 @@
 
 $allowed_domains = [
   'http://localhost:3000',
+  'http://taller-admin-app.duckdns.org/login',
   'http://ncbyiqsys3jptteev2yuoa1a.207.246.118.124.sslip.io'
 ];
 
