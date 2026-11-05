@@ -21,6 +21,11 @@ $router->get('/swagger-json', function () {
   $swagger->getDocs();
 });
 
+$router->get('/get-version-app', function () {
+  require_once __DIR__ . '/services/get.php';
+  getDataFromDB('versions');
+});
+
 $loginHandler = function () {
   require_once 'controllers/UserController.php';
   $userController = new UserController();

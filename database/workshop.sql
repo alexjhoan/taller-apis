@@ -81,6 +81,12 @@ CREATE TABLE IF NOT EXISTS app_settings (
 ) ENGINE=InnoDB;
 INSERT INTO app_settings (setting_key, setting_value) VALUES ('mechanic_cost_visibility', '0') ON DUPLICATE KEY UPDATE setting_key = setting_key;
 
+CREATE TABLE IF NOT EXISTS versions (
+  id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
+  version VARCHAR(50) NOT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+) ENGINE=InnoDB;
+
 CREATE TABLE IF NOT EXISTS alerts (
   id BIGINT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
   order_id INT UNSIGNED NOT NULL,

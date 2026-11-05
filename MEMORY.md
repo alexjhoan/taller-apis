@@ -14,12 +14,14 @@
 - Alertas: alertas nuevas usan `alert_recipients` por usuario; admins activos y usuarios asignados reciben, solo sus recibos se leen y `updated_by` normalizado se escribe/retorna por recibo. Históricas `targeted=0` solo visibles/marcables por admins (antes se filtraban globalmente a mecánicos). Migración `20261029_add_alert_recipient_updated_by.sql`. Asignación acepta IDs activos con rol admin/mechanic. CRUD dinámico bloquea alerts y receipts.
 - Las alertas de órdenes se insertan después de confirmar la operación; errores se registran sin revertirla. Decisiones públicas generan tipo específico y son idempotentes.
 - `work_orders.budget_accepted` figura en el contrato/frontend pero falta en `database/workshop.sql`; asumir que existe en la BD desplegada. El monto se calcula desde `budget_items`.
+- Tabla `versions` (`id`, `version`, `created_at`) y GET público `/get-version-app`; migración `20261105_create_versions_table.sql`. La tabla se crea vacía si no se proporciona un valor inicial.
 
 # Decisiones
 - Mantener `work_orders` como recurso explícito; los metadatos MySQL evitan listas rígidas de columnas.
 - Bloquear campos administrados por servidor y mantener tokens/credenciales fuera de respuestas públicas.
 - Las escrituras de órdenes y sus eventos de auditoría deben ser atómicas para no dejar historial incompleto.
 - Las alertas nuevas son best-effort y su inserción más destinatarios es atómica; la audiencia no viene del cliente. Mantener compatibilidad global solo para alertas históricas hasta decidir su limpieza/migración.
+- El endpoint de versión es público para permitir consulta desde la app sin JWT; mantener su respuesta limitada a los registros de versiones.
 - Registrar solo diferencias reales; estados entregado/cancelado usan acciones específicas y status genérico usa `status_changed`.
 - Conservar `finished_at` existente en reentradas a estados terminados.
 - Los errores internos se registran, pero no se exponen al cliente.

@@ -21,6 +21,44 @@
     }
   ],
   "paths": {
+    "/get-version-app": {
+      "get": {
+        "tags": ["Version"],
+        "summary": "Get application versions",
+        "description": "Returns all rows from the versions table, ordered by descending ID. This endpoint is public and does not require a bearer token.",
+        "responses": {
+          "200": {
+            "description": "Version records; body is empty until a version is inserted.",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["status", "body", "statusText", "total"],
+                  "properties": {
+                    "status": { "type": "integer", "example": 200 },
+                    "body": {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": ["id", "version", "created_at"],
+                        "properties": {
+                          "id": { "type": "integer", "example": 1 },
+                          "version": { "type": "string", "example": "1.0.0" },
+                          "created_at": { "type": "string", "format": "date-time" }
+                        }
+                      }
+                    },
+                    "statusText": { "type": "string", "example": "success" },
+                    "total": { "type": "integer", "example": 1 }
+                  }
+                }
+              }
+            }
+          },
+          "500": { "description": "Database error" }
+        }
+      }
+    },
     "/login-user": {
       "post": {
         "tags": ["Auth"],
