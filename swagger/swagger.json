@@ -183,6 +183,148 @@
         }
       }
     },
+    "/api/push/public-key": {
+      "get": {
+        "security": [{ "BearerAuth": [] }],
+        "tags": ["Push"],
+        "summary": "Get the Web Push public VAPID key",
+        "description": "Returns only the public key. The private VAPID key is never exposed.",
+        "responses": {
+          "200": {
+            "description": "Public VAPID key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["status", "body", "statusText"],
+                  "properties": {
+                    "status": { "type": "integer", "example": 200 },
+                    "body": {
+                      "type": "object",
+                      "required": ["public_key"],
+                      "properties": {
+                        "public_key": { "type": "string", "example": "BExxxxx..." }
+                      }
+                    },
+                    "statusText": { "type": "string", "example": "success" }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "description": "Missing or invalid bearer token" },
+          "403": { "description": "Push notifications are available to admins and mechanics" },
+          "500": { "description": "Database error" },
+          "503": { "description": "VAPID public key is not configured" }
+        }
+      }
+    },
+    "/api/push/subscribe": {
+      "post": {
+        "security": [{ "BearerAuth": [] }],
+        "tags": ["Push"],
+        "summary": "Register or update a browser push subscription",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["endpoint", "keys"],
+                "properties": {
+                  "endpoint": { "type": "string", "format": "uri", "example": "https://fcm.googleapis.com/fcm/send/AAA..." },
+                  "keys": {
+                    "type": "object",
+                    "required": ["p256dh", "auth"],
+                    "properties": {
+                      "p256dh": { "type": "string", "example": "BExxx..." },
+                      "auth": { "type": "string", "example": "yyy..." }
+                    }
+                  },
+                  "user_agent": { "type": "string", "maxLength": 255 }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Subscription saved or updated by endpoint hash",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["status", "body", "statusText"],
+                  "properties": {
+                    "status": { "type": "integer", "example": 200 },
+                    "body": {
+                      "type": "object",
+                      "required": ["id", "saved"],
+                      "properties": {
+                        "id": { "type": "integer", "example": 1 },
+                        "saved": { "type": "boolean", "example": true }
+                      }
+                    },
+                    "statusText": { "type": "string", "example": "success" }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "description": "Missing or invalid bearer token" },
+          "403": { "description": "Push notifications are available to admins and mechanics" },
+          "422": { "description": "Invalid or missing endpoint or subscription keys" },
+          "500": { "description": "Could not save subscription" }
+        }
+      }
+    },
+    "/api/push/unsubscribe": {
+      "post": {
+        "security": [{ "BearerAuth": [] }],
+        "tags": ["Push"],
+        "summary": "Remove a browser push subscription",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["endpoint"],
+                "properties": {
+                  "endpoint": { "type": "string", "format": "uri", "example": "https://fcm.googleapis.com/fcm/send/AAA..." }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Subscription deleted; idempotently returns zero if it did not exist",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["status", "body", "statusText"],
+                  "properties": {
+                    "status": { "type": "integer", "example": 200 },
+                    "body": {
+                      "type": "object",
+                      "required": ["deleted"],
+                      "properties": { "deleted": { "type": "integer", "minimum": 0, "example": 1 } }
+                    },
+                    "statusText": { "type": "string", "example": "success" }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "description": "Missing or invalid bearer token" },
+          "403": { "description": "Push notifications are available to admins and mechanics" },
+          "422": { "description": "Invalid or missing endpoint" },
+          "500": { "description": "Could not remove subscription" }
+        }
+      }
+    },
     "/api/orders": {
       "get": {
         "security": [{ "BearerAuth": [] }],
@@ -212,7 +354,7 @@
         "security": [{ "BearerAuth": [] }],
         "tags": ["Orders"],
         "summary": "Create vehicle reception order",
-        "description": "Creates the order and audit entry transactionally. After commit, mechanic-created orders emit order_created. When an admin creates an order assigned to active admins and/or mechanics, order_assigned is emitted to all active admins and each assigned user.",
+        "description": "Creates the order and audit entry transactionally. After commit, sends a best-effort push to admins for the new order. Mechanic-created orders also emit order_created. When an admin creates an order assigned to active admins and/or mechanics, order_assigned is emitted to all active admins and each assigned user.",
         "requestBody": { "$ref": "#/components/requestBodies/Order" },
         "responses": {
           "201": { "description": "Created" },
@@ -226,7 +368,7 @@
         "security": [{ "BearerAuth": [] }],
         "tags": ["Orders"],
         "summary": "Update an existing work order",
-        "description": "After the order update commits, emits best-effort alerts for new assignments, newly requested pending technician parts, a budget_accepted transition from 0 to 1, and actual status changes. Only admins may change assigned_user_id, and each target must be an active admin or mechanic. Repeated pending parts and unchanged status do not emit duplicate alerts. Budget acceptance uses the sum of budget_items quantity × unit_price.",
+        "description": "After the order update commits, emits best-effort alerts and Web Push notifications for admin-visible order changes. When assigned_user_id gains a new active mechanic, that mechanic receives an assignment push unless the resulting order status is delivered or cancelled. Only admins may change assigned_user_id, and each target must be an active admin or mechanic. Repeated pending parts and unchanged status do not emit duplicate alerts. Budget acceptance uses the sum of budget_items quantity × unit_price.",
         "requestBody": { "$ref": "#/components/requestBodies/OrderPatch" },
         "responses": {
           "200": {

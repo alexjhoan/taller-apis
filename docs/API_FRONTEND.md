@@ -955,6 +955,80 @@ curl -i -X PATCH "$BASE_URL/api/orders" \
   -d '{"id":25,"budget_accepted":1}'
 ```
 
+## Notificaciones Push Web
+
+Las notificaciones push requieren que el servidor defina `VAPID_PUBLIC_KEY`,
+`VAPID_PRIVATE_KEY` y `VAPID_SUBJECT` en su entorno. La clave privada nunca se
+devuelve al cliente. Con Docker Compose, estas variables se leen del archivo
+`.env` del servidor; generarlas con `npx web-push generate-vapid-keys` y no
+guardar el archivo `.env` en el repositorio:
+
+```dotenv
+VAPID_PUBLIC_KEY=...
+VAPID_PRIVATE_KEY=...
+VAPID_SUBJECT=mailto:contacto@taller.com
+```
+
+Aplicar `database/migrations/20261106_create_push_subscriptions.sql` antes de
+usar estos endpoints. Solo usuarios autenticados activos con rol `admin` o
+`mechanic` pueden administrar sus suscripciones.
+
+### GET `/api/push/public-key`
+
+Requiere JWT. Devuelve únicamente la clave pública:
+
+```json
+{
+  "status": 200,
+  "body": { "public_key": "BExxxxx..." },
+  "statusText": "success"
+}
+```
+
+### POST `/api/push/subscribe`
+
+Requiere JWT y JSON. La suscripción se crea o actualiza por el hash SHA-256
+del endpoint, así que volver a suscribir el mismo navegador no crea otra fila.
+
+```json
+{
+  "endpoint": "https://fcm.googleapis.com/fcm/send/AAA...",
+  "keys": {
+    "p256dh": "BExxx...",
+    "auth": "yyy..."
+  },
+  "user_agent": "Mozilla/5.0 ..."
+}
+```
+
+`user_agent` es opcional. Respuesta:
+
+```json
+{
+  "status": 200,
+  "body": { "id": 1, "saved": true },
+  "statusText": "success"
+}
+```
+
+### POST `/api/push/unsubscribe`
+
+Requiere JWT y JSON:
+
+```json
+{ "endpoint": "https://fcm.googleapis.com/fcm/send/AAA..." }
+```
+
+El endpoint se elimina de forma idempotente y `deleted` vale `0` si no había
+una suscripción.
+
+El servidor envía notificaciones best-effort a admins cuando crea alertas de
+órdenes, decisiones de presupuesto, repuestos o cambios de estado. Cuando un
+PATCH agrega mecánicos a `assigned_user_id`, solo los mecánicos nuevos reciben
+el aviso de asignación; no se envía si la orden queda en estado `delivered` o
+`cancelled`. Un fallo del servicio push se registra internamente y no revierte
+la operación principal.
+
 ## 9. WhatsApp
 
 ### GET `/api/orders/{id}/whatsapp-url`

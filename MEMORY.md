@@ -15,6 +15,9 @@
 - Las alertas de órdenes se insertan después de confirmar la operación; errores se registran sin revertirla. Decisiones públicas generan tipo específico y son idempotentes.
 - `work_orders.budget_accepted` figura en el contrato/frontend pero falta en `database/workshop.sql`; asumir que existe en la BD desplegada. El monto se calcula desde `budget_items`.
 - Tabla `versions` (`id`, `version`, `created_at`) y GET público `/get-version-app`; migración `20261105_create_versions_table.sql`. La tabla se crea vacía si no se proporciona un valor inicial.
+- Evidencias se guardan en `assets/evidence/{orderId}`. Docker prepara esa ruta como escribible para `www-data`; Compose la monta en el volumen nombrado `backend_uploads` para conservar archivos al recrear contenedores.
+- Push Web usa `PushController`, `PushSender` y `push_subscriptions`; Compose inyecta `VAPID_*` desde el entorno, y `database/migrations/20261106_create_push_subscriptions.sql` debe aplicarse. Admins reciben push por alertas; en PATCH de asignación solo mecánicos nuevos, excepto órdenes entregadas/canceladas.
+- `minishlink/web-push` v11 encola envíos con `queueNotification()` y los despacha con `flush()`; `vendor/` está ignorado y no debe versionarse.
 
 # Decisiones
 - Mantener `work_orders` como recurso explícito; los metadatos MySQL evitan listas rígidas de columnas.
@@ -25,6 +28,9 @@
 - Registrar solo diferencias reales; estados entregado/cancelado usan acciones específicas y status genérico usa `status_changed`.
 - Conservar `finished_at` existente en reentradas a estados terminados.
 - Los errores internos se registran, pero no se exponen al cliente.
+- Persistir evidencias en un volumen montado sobre `assets/evidence`, la ruta usada por subida y lectura, en lugar de crear una carpeta `uploads` distinta.
+- Mantener Web Push best-effort posterior a la operación/alerta; no exponer nunca `VAPID_PRIVATE_KEY`, ni convertir fallos del servicio push en fallos de negocio.
+- No llamar `sendNotification()` en WebPush v11: usar `queueNotification()` antes de `flush()`.
 
 # Errores a evitar
 - No omitir migraciones SQL ni actualizaciones Swagger cuando cambia el contrato.
@@ -32,3 +38,4 @@
 - No escribir contraseñas en claro en operaciones CRUD dinámicas.
 - No hacer consultas N+1 para evidencias ni exponer audit trail desde portal público.
 - No guardar `updated_by` de alertas sin validarlo contra el usuario autenticado; el endpoint de lectura masiva aún ignora ese campo.
+- Al introducir `backend_uploads` por primera vez, respaldar/copiar las evidencias del contenedor antiguo antes de recrearlo; un volumen nuevo no recupera los archivos de la capa escribible del contenedor anterior.

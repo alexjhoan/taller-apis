@@ -21,13 +21,19 @@ services:
     restart: always
     ports:
       - "8081:80"
+    volumes:
+      - backend_uploads:/var/www/html/assets/evidence
     environment:
       - DB_HOST=mariadb
       - DB_NAME=taller
       - DB_USER=usuario_php
       - DB_PASSWORD=MiPasswordDeUsuarioSeguro456!
+      - VAPID_PUBLIC_KEY=${VAPID_PUBLIC_KEY:-}
+      - VAPID_PRIVATE_KEY=${VAPID_PRIVATE_KEY:-}
+      - VAPID_SUBJECT=${VAPID_SUBJECT:-}
     depends_on:
       - mariadb
 
 volumes:
   mariadb_data:
+  backend_uploads:

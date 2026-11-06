@@ -3,6 +3,7 @@
 require_once __DIR__ . '/Controller.php';
 require_once __DIR__ . '/../../db.php';
 require_once __DIR__ . '/../../utils.php';
+require_once __DIR__ . '/../services/PushSender.php';
 
 class WorkshopController extends Controller
 {
@@ -279,7 +280,7 @@ class WorkshopController extends Controller
 
     $placeholders = implode(', ', array_fill(0, count($userIds), '?'));
     $stmt = $db->prepare(
-      "SELECT id, first_name, last_name
+      "SELECT id, first_name, last_name, role
        FROM users
        WHERE active = 1 AND role IN ('mechanic', 'admin') AND id IN ({$placeholders})"
     );
@@ -375,6 +376,9 @@ class WorkshopController extends Controller
         throw new RuntimeException("Could not commit {$type} alert and recipients for order {$orderId}");
       }
       $transactionStarted = false;
+      if ($type !== 'order_assigned') {
+        PushSender::sendToAdmins($db, $orderId, $message);
+      }
       return true;
     } catch (Throwable $error) {
       if ($transactionStarted) {
@@ -764,6 +768,13 @@ class WorkshopController extends Controller
           'order_created',
           "Nueva orden de {$customerName} ({$vehiclePlate}).",
           $assignedMechanics === null ? null : array_column($assignedMechanics, 'id')
+        );
+      }
+      if (($user['role'] ?? '') === 'admin') {
+        PushSender::sendToAdmins(
+          $db,
+          $orderId,
+          "Nueva orden de {$data['customer_name']} ({$data['vehicle_plate']})."
         );
       }
       $this->jsonResponse(['id' => $orderId, 'token' => $token], 201, 'Order created');
@@ -1908,6 +1919,8 @@ class WorkshopController extends Controller
       }
 
       $alerts = [];
+      $assignmentPushUserIds = [];
+      $assignmentPushBody = '';
       if (array_key_exists('assigned_user_id', $changes)) {
         if (($user['role'] ?? '') !== 'admin') {
           $db->rollback();
@@ -1917,6 +1930,20 @@ class WorkshopController extends Controller
         if ($data['assigned_user_id'] !== null) {
           $assignedUserIds = $this->assignedUserIds($data['assigned_user_id']);
           $assignedMechanics = $this->validateActiveMechanics($db, $assignedUserIds);
+          $previouslyAssignedIds = $this->assignedUserIds($oldOrder['assigned_user_id'] ?? null);
+          $newlyAssignedIds = array_values(array_diff($assignedUserIds, $previouslyAssignedIds));
+          $nextStatus = $data['status'] ?? $oldOrder['status'] ?? null;
+          if (!in_array($nextStatus, ['delivered', 'cancelled'], true)) {
+            $assignmentPushUserIds = array_column(
+              array_filter(
+                $assignedMechanics,
+                static fn(array $mechanic): bool =>
+                  $mechanic['role'] === 'mechanic' && in_array((int) $mechanic['id'], $newlyAssignedIds, true)
+              ),
+              'id'
+            );
+            $assignmentPushBody = "Te asignaron la orden #{$id} — {$oldOrder['vehicle_plate']}";
+          }
           $mechanicNames = array_map(
             static fn(array $mechanic): string => trim($mechanic['first_name'] . ' ' . $mechanic['last_name']),
             $assignedMechanics
@@ -1995,6 +2022,13 @@ class WorkshopController extends Controller
       }
       if ($budgetAccepted) {
         $this->notifyAcceptedBudgetBestEffort($db, $id, (string) $oldOrder['vehicle_plate']);
+      }
+      if ($assignmentPushUserIds !== []) {
+        PushSender::sendToUsers($db, $assignmentPushUserIds, [
+          'title' => 'Mecaflow',
+          'body' => $assignmentPushBody,
+          'order_id' => $id,
+        ]);
       }
       $this->jsonResponse(['id' => $id, 'updated' => true], 200, 'Order updated successfully', 1);
     } catch (Throwable $error) {

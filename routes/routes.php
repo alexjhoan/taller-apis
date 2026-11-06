@@ -35,6 +35,19 @@ $loginHandler = function () {
 // Alias compatibles: el frontend puede usar cualquiera de estas rutas de login.
 $router->post('/login-user', $loginHandler);
 
+$router->get('/api/push/public-key', function () {
+  require_once __DIR__ . '/controllers/PushController.php';
+  (new PushController())->publicKey();
+});
+$router->post('/api/push/subscribe', function () {
+  require_once __DIR__ . '/controllers/PushController.php';
+  (new PushController())->subscribe();
+});
+$router->post('/api/push/unsubscribe', function () {
+  require_once __DIR__ . '/controllers/PushController.php';
+  (new PushController())->unsubscribe();
+});
+
 $router->get('/api/public/order/{token}', function () {
   require_once __DIR__ . '/controllers/WorkshopController.php';
   (new WorkshopController())->publicOrder();
