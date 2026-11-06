@@ -78,6 +78,42 @@ class PushSender
     ]);
   }
 
+  public static function sendTestToUsers(mysqli $db, array $userIds, array $payload): array
+  {
+    $userIds = array_values(array_unique(array_filter(
+      array_map('intval', $userIds),
+      static fn(int $userId): bool => $userId > 0
+    )));
+    if ($userIds === []) {
+      return [
+        'targeted_devices' => 0,
+        'accepted_by_push_service' => 0,
+        'failed' => 0,
+      ];
+    }
+
+    $placeholders = implode(', ', array_fill(0, count($userIds), '?'));
+    $stmt = $db->prepare(
+      "SELECT ps.endpoint, ps.p256dh, ps.auth
+       FROM push_subscriptions ps
+       INNER JOIN users u ON u.id = ps.user_id
+       WHERE u.active = 1 AND u.role IN ('admin', 'mechanic')
+         AND u.id IN ({$placeholders})"
+    );
+    $types = str_repeat('i', count($userIds));
+    $bindParams = [$types];
+    foreach ($userIds as &$userId) {
+      $bindParams[] = &$userId;
+    }
+    unset($userId);
+    call_user_func_array([$stmt, 'bind_param'], $bindParams);
+    $stmt->execute();
+    $subscriptions = $stmt->get_result()->fetch_all(MYSQLI_ASSOC);
+    $stmt->close();
+
+    return self::sendSubscriptions($db, $subscriptions, $payload);
+  }
+
   private static function sendSubscriptions(mysqli $db, array $subscriptions, array $payload): array
   {
     $delivery = [

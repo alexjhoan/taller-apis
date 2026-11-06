@@ -15,9 +15,9 @@ El backend está preparado con estos componentes:
   SHA-256 del endpoint.
 - `POST /api/push/unsubscribe`: elimina una suscripción por endpoint y es
   idempotente.
-- `POST /api/push/test`: solo admin; envía un mensaje de prueba a las
-  suscripciones de todos los admins y mecánicos activos sin crear alertas
-  persistentes.
+- `POST /api/push/test`: solo admin; acepta destinatarios y contenido de prueba,
+  o sin payload envía un mensaje fijo a todos los admins/mecánicos activos.
+  No crea alertas persistentes.
 - Las alertas de órdenes notifican a admins. El PATCH de asignación notifica
   solo a los mecánicos nuevos, y no envía asignaciones cuando la orden queda
   `delivered` o `cancelled`.
@@ -217,12 +217,12 @@ self.addEventListener('push', (event) => {
 
 Este handler pertenece al frontend; el backend solo envía el payload.
 
-## 5. Probar el botón de notificación global
+## 5. Probar el botón de notificación
 
 Este endpoint está pensado para un botón explícito de prueba visible solo a
-admins. Envía un mensaje fijo a todos los dispositivos con suscripción
-registrada de usuarios activos con rol `admin` o `mechanic`; no acepta un
-mensaje arbitrario y no inserta una fila en `alerts`.
+admins. Puede dirigirse a una lista limitada de usuarios activos con rol
+`admin` o `mechanic`, y permite texto personalizado de prueba. Sin payload,
+envía un mensaje fijo a todos esos usuarios. No inserta una fila en `alerts`.
 
 Desde PowerShell, con un JWT de admin y después de registrar suscripciones
 reales en los navegadores que se probarán:
@@ -233,11 +233,31 @@ $testResult = Invoke-RestMethod -Uri "$api/api/push/test" -Method Post `
 $testResult
 ```
 
+Para enviar exactamente el payload que usa el frontend:
+
+```powershell
+$testBody = @{
+  user_ids = @(1)
+  title = '🧪 Prueba de notificación'
+  body = 'Esta es una notificación de prueba desde el sidebar'
+  order_id = 0
+} | ConvertTo-Json -Compress
+
+$testResult = Invoke-RestMethod -Uri "$api/api/push/test" -Method Post `
+  -Headers $headers -ContentType 'application/json' -Body $testBody
+```
+
+`updated_by` se ignora: la identidad se obtiene del JWT. `user_ids` debe
+contener IDs positivos y el endpoint envía a todos los dispositivos suscritos
+de esas cuentas activas, no a otros usuarios.
+
 La respuesta informa cuántos dispositivos estaban registrados, cuántos
 servicios push aceptaron el mensaje y cuántos fallaron. `accepted_by_push_service`
 no confirma que la notificación ya apareció en pantalla; valida también el
 permiso del navegador y el handler `push` del service worker. Un usuario sin
 rol admin debe recibir `403`; una petición sin JWT debe recibir `401`.
+Si falta la configuración VAPID, el endpoint devuelve `503`; un `500` aún
+requiere revisar los logs del contenedor para conocer el error interno.
 
 El frontend puede llamar la misma ruta al hacer clic en el botón:
 

@@ -145,9 +145,59 @@ class PushController extends Controller
       $this->jsonResponse([], 403, 'Only admins can send a test notification to all devices');
     }
 
+    $payload = $this->getBody();
+    if ($payload === [] && (int) ($_SERVER['CONTENT_LENGTH'] ?? 0) > 0) {
+      $this->jsonResponse([], 422, 'Invalid JSON test push payload');
+    }
+    if ($payload === []) {
+      $userIds = null;
+      $notification = [
+        'title' => 'Mecaflow',
+        'body' => 'Esta es una notificación de prueba.',
+      ];
+    } else {
+      $userIds = is_array($payload) ? ($payload['user_ids'] ?? null) : null;
+      $title = is_array($payload) ? ($payload['title'] ?? null) : null;
+      $body = is_array($payload) ? ($payload['body'] ?? null) : null;
+      $orderId = is_array($payload) ? ($payload['order_id'] ?? null) : null;
+
+      if (
+        !is_array($userIds) || $userIds === [] || count($userIds) > 100
+        || !is_string($title) || trim($title) === '' || strlen($title) > 100
+        || !is_string($body) || trim($body) === '' || strlen($body) > 800
+        || ($orderId !== null && filter_var($orderId, FILTER_VALIDATE_INT, ['options' => ['min_range' => 0]]) === false)
+      ) {
+        $this->jsonResponse([], 422, 'Invalid test push payload');
+      }
+
+      foreach ($userIds as $userId) {
+        if (filter_var($userId, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]) === false) {
+          $this->jsonResponse([], 422, 'user_ids must contain positive integer IDs');
+        }
+      }
+
+      $notification = [
+        'title' => trim($title),
+        'body' => trim($body),
+      ];
+      if ($orderId !== null) {
+        $notification['order_id'] = (int) $orderId;
+      }
+    }
+
+    if (
+      !getenv('VAPID_PUBLIC_KEY')
+      || !getenv('VAPID_PRIVATE_KEY')
+      || !getenv('VAPID_SUBJECT')
+    ) {
+      $this->jsonResponse([], 503, 'Web Push is not configured; verify the VAPID environment variables');
+    }
+
     require_once __DIR__ . '/../services/PushSender.php';
     try {
-      $result = PushSender::sendTestToActiveUsers($user['db']);
+      $result = $userIds === null
+        ? PushSender::sendTestToActiveUsers($user['db'])
+        : PushSender::sendTestToUsers($user['db'], $userIds, $notification);
       $this->jsonResponse($result, 200, 'Test push processed');
     } catch (Throwable $error) {
       error_log('Could not send test push notification: ' . $error->getMessage());

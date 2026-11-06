@@ -1024,10 +1024,43 @@ una suscripción.
 
 ### POST `/api/push/test`
 
-Requiere JWT de un administrador. No requiere payload. Envía un mensaje fijo
-de prueba a las suscripciones guardadas de todos los usuarios activos con rol
-`admin` o `mechanic`; úsalo solo desde una acción explícita de prueba en el
-frontend. No crea una alerta persistente en la aplicación.
+Requiere JWT de un administrador. Con el payload mostrado, envía el mensaje
+solo a los dispositivos suscritos de los usuarios activos enumerados en
+`user_ids` (máximo 100, rol `admin` o `mechanic`). Sin payload, conserva el
+modo global y envía el mensaje fijo a todos los admins/mecánicos activos con
+suscripciones. No crea una alerta persistente en la aplicación.
+
+El frontend puede enviar `user_ids`, `title`, `body` y `order_id` como JSON:
+
+```json
+{
+  "user_ids": [1],
+  "title": "🧪 Prueba de notificación",
+  "body": "Esta es una notificación de prueba desde el sidebar",
+  "order_id": 0,
+  "updated_by": "{\"id\":1,\"firstName\":\"Alex\",\"lastName\":\"Ramirez\",\"role\":\"admin\"}"
+}
+```
+
+Incluir `Content-Type: application/json` y el JSON como cuerpo de la petición.
+`updated_by` se ignora; la identidad se obtiene del JWT. Campos inválidos
+responden `422`; si VAPID no está configurado, responde `503`.
+
+Ejemplo, suponiendo que `headers` ya contiene el JWT:
+
+```javascript
+const response = await fetch(`${api}/api/push/test`, {
+  method: 'POST',
+  headers: { ...headers, 'Content-Type': 'application/json' },
+  body: JSON.stringify({
+    user_ids: [1],
+    title: '🧪 Prueba de notificación',
+    body: 'Esta es una notificación de prueba desde el sidebar',
+    order_id: 0
+  })
+});
+const result = await response.json();
+```
 
 ```javascript
 const response = await fetch(`${api}/api/push/test`, {

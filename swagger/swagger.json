@@ -329,8 +329,35 @@
       "post": {
         "security": [{ "BearerAuth": [] }],
         "tags": ["Push"],
-        "summary": "Send a test push notification to all active subscribed users",
-        "description": "Admin-only endpoint. Sends a fixed test message to registered subscriptions belonging to active admins and mechanics. It does not create an in-app alert. A push-service acceptance does not guarantee that the operating system displayed the notification.",
+        "summary": "Send a test push notification",
+        "description": "Admin-only endpoint. With a JSON payload, sends the requested test message to subscriptions of the specified active admins/mechanics. Without a body, sends a fixed test message to all active subscribed admins/mechanics. It does not create an in-app alert, and updated_by is ignored. A push-service acceptance does not guarantee that the operating system displayed the notification.",
+        "requestBody": {
+          "required": false,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["user_ids", "title", "body"],
+                "properties": {
+                  "user_ids": {
+                    "type": "array",
+                    "minItems": 1,
+                    "maxItems": 100,
+                    "items": { "type": "integer", "minimum": 1 },
+                    "example": [1]
+                  },
+                  "title": { "type": "string", "minLength": 1, "maxLength": 100, "example": "🧪 Prueba de notificación" },
+                  "body": { "type": "string", "minLength": 1, "maxLength": 800, "example": "Esta es una notificación de prueba desde el sidebar" },
+                  "order_id": { "type": "integer", "minimum": 0, "example": 0 },
+                  "updated_by": {
+                    "type": "string",
+                    "description": "Ignored; the authenticated user is determined from the JWT."
+                  }
+                }
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "Test notification processing results",
@@ -358,6 +385,8 @@
           },
           "401": { "description": "Missing or invalid bearer token" },
           "403": { "description": "Only admins can send a test notification to all devices" },
+          "422": { "description": "Invalid test notification payload" },
+          "503": { "description": "Web Push VAPID environment variables are not configured" },
           "500": { "description": "Could not send test push notification" }
         }
       }
