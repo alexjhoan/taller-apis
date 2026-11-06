@@ -47,6 +47,10 @@ $router->post('/api/push/unsubscribe', function () {
   require_once __DIR__ . '/controllers/PushController.php';
   (new PushController())->unsubscribe();
 });
+$router->post('/api/push/test', function () {
+  require_once __DIR__ . '/controllers/PushController.php';
+  (new PushController())->test();
+});
 
 $router->get('/api/public/order/{token}', function () {
   require_once __DIR__ . '/controllers/WorkshopController.php';

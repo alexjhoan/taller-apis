@@ -1022,6 +1022,41 @@ Requiere JWT y JSON:
 El endpoint se elimina de forma idempotente y `deleted` vale `0` si no había
 una suscripción.
 
+### POST `/api/push/test`
+
+Requiere JWT de un administrador. No requiere payload. Envía un mensaje fijo
+de prueba a las suscripciones guardadas de todos los usuarios activos con rol
+`admin` o `mechanic`; úsalo solo desde una acción explícita de prueba en el
+frontend. No crea una alerta persistente en la aplicación.
+
+```javascript
+const response = await fetch(`${api}/api/push/test`, {
+  method: 'POST',
+  headers: { Authorization: `Bearer ${token}` }
+});
+const result = await response.json();
+```
+
+Respuesta `200`:
+
+```json
+{
+  "status": 200,
+  "body": {
+    "targeted_devices": 3,
+    "accepted_by_push_service": 3,
+    "failed": 0
+  },
+  "statusText": "Test push processed"
+}
+```
+
+`accepted_by_push_service` significa que el servicio push aceptó el mensaje,
+no que el dispositivo ya lo mostró. Cada navegador/PWA debe haber otorgado
+permiso y registrado previamente su suscripción; el service worker del
+frontend debe mostrar el evento `push`. El botón debería evitar envíos
+repetidos mientras la petición está en curso.
+
 El servidor envía notificaciones best-effort a admins cuando crea alertas de
 órdenes, decisiones de presupuesto, repuestos o cambios de estado. Cuando un
 PATCH agrega mecánicos a `assigned_user_id`, solo los mecánicos nuevos reciben

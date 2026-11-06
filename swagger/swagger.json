@@ -325,6 +325,43 @@
         }
       }
     },
+    "/api/push/test": {
+      "post": {
+        "security": [{ "BearerAuth": [] }],
+        "tags": ["Push"],
+        "summary": "Send a test push notification to all active subscribed users",
+        "description": "Admin-only endpoint. Sends a fixed test message to registered subscriptions belonging to active admins and mechanics. It does not create an in-app alert. A push-service acceptance does not guarantee that the operating system displayed the notification.",
+        "responses": {
+          "200": {
+            "description": "Test notification processing results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["status", "body", "statusText"],
+                  "properties": {
+                    "status": { "type": "integer", "example": 200 },
+                    "body": {
+                      "type": "object",
+                      "required": ["targeted_devices", "accepted_by_push_service", "failed"],
+                      "properties": {
+                        "targeted_devices": { "type": "integer", "minimum": 0, "example": 3 },
+                        "accepted_by_push_service": { "type": "integer", "minimum": 0, "example": 2 },
+                        "failed": { "type": "integer", "minimum": 0, "example": 1 }
+                      }
+                    },
+                    "statusText": { "type": "string", "example": "Test push processed" }
+                  }
+                }
+              }
+            }
+          },
+          "401": { "description": "Missing or invalid bearer token" },
+          "403": { "description": "Only admins can send a test notification to all devices" },
+          "500": { "description": "Could not send test push notification" }
+        }
+      }
+    },
     "/api/orders": {
       "get": {
         "security": [{ "BearerAuth": [] }],

@@ -40,7 +40,7 @@ class PushController extends Controller
       $this->jsonResponse([], 403, 'Push notifications are available to admins and mechanics');
     }
 
-    return ['id' => (int) $userId, 'db' => $db];
+    return ['id' => (int) $userId, 'role' => $user['role'], 'db' => $db];
   }
 
   private function endpointFromPayload(mixed $payload): ?string
@@ -135,6 +135,23 @@ class PushController extends Controller
     } catch (Throwable $error) {
       error_log('Could not remove push subscription: ' . $error->getMessage());
       $this->jsonResponse([], 500, 'Could not remove push subscription');
+    }
+  }
+
+  public function test(): void
+  {
+    $user = $this->authenticatedUser();
+    if ($user['role'] !== 'admin') {
+      $this->jsonResponse([], 403, 'Only admins can send a test notification to all devices');
+    }
+
+    require_once __DIR__ . '/../services/PushSender.php';
+    try {
+      $result = PushSender::sendTestToActiveUsers($user['db']);
+      $this->jsonResponse($result, 200, 'Test push processed');
+    } catch (Throwable $error) {
+      error_log('Could not send test push notification: ' . $error->getMessage());
+      $this->jsonResponse([], 500, 'Could not send test push notification');
     }
   }
 }

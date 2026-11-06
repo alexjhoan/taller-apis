@@ -36,13 +36,7 @@ class PushSender
       return;
     }
 
-    $payload['body'] = self::truncate((string) ($payload['body'] ?? ''), self::MAX_BODY_LENGTH);
     try {
-      $json = json_encode($payload, JSON_THROW_ON_ERROR | JSON_INVALID_UTF8_SUBSTITUTE);
-      if (strlen($json) > self::MAX_PAYLOAD_BYTES) {
-        throw new RuntimeException('Web Push payload exceeds the 4096-byte limit');
-      }
-
       $placeholders = implode(', ', array_fill(0, count($userIds), '?'));
       $stmt = $db->prepare(
         "SELECT endpoint, p256dh, auth
@@ -63,12 +57,50 @@ class PushSender
         return;
       }
 
+      self::sendSubscriptions($db, $subscriptions, $payload);
+    } catch (Throwable $error) {
+      error_log('Could not send push notifications: ' . $error->getMessage());
+    }
+  }
+
+  public static function sendTestToActiveUsers(mysqli $db): array
+  {
+    $result = $db->query(
+      "SELECT ps.endpoint, ps.p256dh, ps.auth
+       FROM push_subscriptions ps
+       INNER JOIN users u ON u.id = ps.user_id
+       WHERE u.active = 1 AND u.role IN ('admin', 'mechanic')"
+    );
+    $subscriptions = $result->fetch_all(MYSQLI_ASSOC);
+    return self::sendSubscriptions($db, $subscriptions, [
+      'title' => 'Mecaflow',
+      'body' => 'Esta es una notificación de prueba.',
+    ]);
+  }
+
+  private static function sendSubscriptions(mysqli $db, array $subscriptions, array $payload): array
+  {
+    $delivery = [
+      'targeted_devices' => count($subscriptions),
+      'accepted_by_push_service' => 0,
+      'failed' => 0,
+    ];
+    if ($subscriptions === []) {
+      return $delivery;
+    }
+
+    $payload['body'] = self::truncate((string) ($payload['body'] ?? ''), self::MAX_BODY_LENGTH);
+    try {
+      $json = json_encode($payload, JSON_THROW_ON_ERROR | JSON_INVALID_UTF8_SUBSTITUTE);
+      if (strlen($json) > self::MAX_PAYLOAD_BYTES) {
+        throw new RuntimeException('Web Push payload exceeds the 4096-byte limit');
+      }
+
       $publicKey = getenv('VAPID_PUBLIC_KEY');
       $privateKey = getenv('VAPID_PRIVATE_KEY');
       $subject = getenv('VAPID_SUBJECT');
       if (!$publicKey || !$privateKey || !$subject) {
-        error_log('Web Push is not configured; notification was skipped');
-        return;
+        throw new RuntimeException('Web Push is not configured');
       }
 
       $webPush = new WebPush([
@@ -97,9 +129,11 @@ class PushSender
 
       foreach ($webPush->flush() as $report) {
         if ($report->isSuccess()) {
+          $delivery['accepted_by_push_service']++;
           continue;
         }
 
+        $delivery['failed']++;
         error_log('Web Push delivery failed: ' . $report->getReason());
         if (!$report->isSubscriptionExpired()) {
           continue;
@@ -116,8 +150,11 @@ class PushSender
         }
       }
     } catch (Throwable $error) {
-      error_log('Could not send push notifications: ' . $error->getMessage());
+      $delivery['failed'] = $delivery['targeted_devices'] - $delivery['accepted_by_push_service'];
+      throw $error;
     }
+
+    return $delivery;
   }
 
   private static function truncate(string $value, int $maxLength): string

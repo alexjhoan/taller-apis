@@ -6,6 +6,11 @@
 .pnp.js
 /vendor/
 
+# server secrets
+.env
+.env.*
+!.env.example
+
 # testing
 /coverage
 
