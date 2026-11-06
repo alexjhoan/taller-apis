@@ -9,12 +9,13 @@ RUN apt-get update \
 # Activar mod_rewrite de Apache para rutas limpias en PHP
 RUN a2enmod rewrite
 
-# Copiar el código PHP al directorio web de Apache
-COPY . /var/www/html/
+# Crear la carpeta de evidencias y asignar permisos seguros para Apache
+RUN mkdir -p /var/www/html/uploads/evidences && \
+    chown -R www-data:www-data /var/www/html/uploads && \
+    chmod -R 775 /var/www/html/uploads
 
-# Instalar dependencias PHP declaradas en Composer
-COPY --from=composer:2 /usr/bin/composer /usr/local/bin/composer
-RUN composer install --no-dev --prefer-dist --no-interaction --optimize-autoloader --working-dir=/var/www/html
+# Copiar el código fuente al contenedor
+COPY . /var/www/html/
 
 # Preparar el directorio persistente de evidencias para el usuario de Apache
 RUN mkdir -p /var/www/html/assets/evidence \
