@@ -2,12 +2,18 @@ FROM php:8.2-apache
 
 # Instalar extensiones necesarias para MariaDB y Web Push
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libcurl4-openssl-dev libgmp-dev libonig-dev \
+    && apt-get install -y --no-install-recommends libcurl4-openssl-dev libgmp-dev libonig-dev unzip \
     && docker-php-ext-install mysqli curl gmp mbstring \
     && rm -rf /var/lib/apt/lists/*
 
 # Activar mod_rewrite de Apache para rutas limpias en PHP
 RUN a2enmod rewrite
+
+# Instalar dependencias bloqueadas por Composer dentro de la imagen
+COPY --from=composer:2 /usr/bin/composer /usr/local/bin/composer
+WORKDIR /var/www/html
+COPY composer.json composer.lock ./
+RUN composer install --no-dev --prefer-dist --no-interaction --optimize-autoloader
 
 # Crear la carpeta de evidencias y asignar permisos seguros para Apache
 RUN mkdir -p /var/www/html/uploads/evidences && \

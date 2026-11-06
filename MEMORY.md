@@ -18,6 +18,7 @@
 - Evidencias se guardan en `assets/evidence/{orderId}`. Docker prepara esa ruta como escribible para `www-data`; Compose la monta en el volumen nombrado `backend_uploads` para conservar archivos al recrear contenedores.
 - Push Web usa `PushController`, `PushSender` y `push_subscriptions`; Compose inyecta `VAPID_*` desde el entorno, y `database/migrations/20261106_create_push_subscriptions.sql` debe aplicarse. Admins reciben push por alertas; en PATCH de asignación solo mecánicos nuevos, excepto órdenes entregadas/canceladas.
 - `minishlink/web-push` v11 encola envíos con `queueNotification()` y los despacha con `flush()`; `vendor/` está ignorado y no debe versionarse.
+- El Dockerfile debe generar `vendor/autoload.php` ejecutando `composer install` con `composer.lock`; `.dockerignore` excluye `vendor/` del contexto y Git no debe rastrear librerías vendorizadas.
 
 # Decisiones
 - Mantener `work_orders` como recurso explícito; los metadatos MySQL evitan listas rígidas de columnas.
