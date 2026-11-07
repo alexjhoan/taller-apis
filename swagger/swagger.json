@@ -672,7 +672,7 @@
           "422": {
             "description": "Missing or invalid evidence_type, invalid upload, unsupported media type, invalid image, or image exceeds 40 megapixels"
           },
-          "500": { "description": "Media processing, FFmpeg, storage, or database failure" }
+          "500": { "description": "Media processing, FFmpeg, storage, or database failure. The detailed error is included in statusText only when DISPLAY_ERRORS is enabled; otherwise a generic message is returned." }
         }
       },
       "get": {

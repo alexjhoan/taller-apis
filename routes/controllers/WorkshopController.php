@@ -982,8 +982,18 @@ class WorkshopController extends Controller
       if (is_file($destinationPath) && !@unlink($destinationPath)) {
         error_log('Could not remove evidence file after failed upload: ' . $destinationPath);
       }
-      error_log($error->getMessage());
-      $this->jsonResponse([], 500, 'Could not process or store evidence');
+      error_log(sprintf(
+        'Could not process or store evidence (%s) at %s:%d: %s',
+        get_class($error),
+        $error->getFile(),
+        $error->getLine(),
+        $error->getMessage()
+      ));
+      $statusText = 'Could not process or store evidence';
+      if (defined('DISPLAY_ERRORS') && DISPLAY_ERRORS) {
+        $statusText .= ': ' . $error->getMessage();
+      }
+      $this->jsonResponse([], 500, $statusText);
     }
   }
 
