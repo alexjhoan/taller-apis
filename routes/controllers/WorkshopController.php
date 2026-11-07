@@ -910,10 +910,6 @@ class WorkshopController extends Controller
 
     $finfo = new finfo(FILEINFO_MIME_TYPE);
     $mimeType = $finfo->file($file['tmp_name']);
-    $allowed = ['image/jpeg', 'image/png', 'image/webp', 'video/mp4', 'video/quicktime'];
-    if (!is_string($mimeType) || !in_array($mimeType, $allowed, true)) {
-      $this->jsonResponse([], 422, 'Unsupported evidence file type');
-    }
 
     $directory = __DIR__ . '/../../assets/evidence/' . $id;
     if (!is_dir($directory) && !@mkdir($directory, 0750, true) && !is_dir($directory)) {
@@ -921,16 +917,21 @@ class WorkshopController extends Controller
       $this->jsonResponse([], 500, 'Could not store evidence');
     }
 
-    $extension = in_array($mimeType, ['image/jpeg', 'image/png', 'image/webp'], true) ? 'jpg' : 'mp4';
-    $filename = date('Ymd_His') . '_' . bin2hex(random_bytes(8)) . '.' . $extension;
-    $temporaryPath = $directory . '/.processing-' . bin2hex(random_bytes(8)) . '.' . $extension;
-    $destinationPath = $directory . '/' . $filename;
+    $temporaryPath = $directory . '/.processing-' . bin2hex(random_bytes(8)) . '.jpg';
+    $destinationPath = null;
     require_once __DIR__ . '/../services/MediaProcessor.php';
     $processor = new MediaProcessor();
     $transactionStarted = false;
 
     try {
-      $type = $processor->process($file['tmp_name'], is_string($mimeType) ? $mimeType : '', $temporaryPath);
+      $type = $processor->process(
+        $file['tmp_name'],
+        is_string($mimeType) ? $mimeType : '',
+        $temporaryPath
+      );
+      $extension = $type === 'photo' ? 'jpg' : 'mp4';
+      $filename = date('Ymd_His') . '_' . bin2hex(random_bytes(8)) . '.' . $extension;
+      $destinationPath = $directory . '/' . $filename;
       if (!is_file($temporaryPath) || filesize($temporaryPath) < 1 || !@rename($temporaryPath, $destinationPath)) {
         throw new RuntimeException('Could not persist processed evidence');
       }
@@ -968,7 +969,7 @@ class WorkshopController extends Controller
       if (is_file($temporaryPath) && !@unlink($temporaryPath)) {
         error_log('Could not remove temporary evidence file: ' . $temporaryPath);
       }
-      if (is_file($destinationPath) && !@unlink($destinationPath)) {
+      if ($destinationPath !== null && is_file($destinationPath) && !@unlink($destinationPath)) {
         error_log('Could not remove evidence file after rejected upload: ' . $destinationPath);
       }
       $this->jsonResponse([], 422, $error->getMessage());
@@ -979,7 +980,7 @@ class WorkshopController extends Controller
       if (is_file($temporaryPath) && !@unlink($temporaryPath)) {
         error_log('Could not remove temporary evidence file: ' . $temporaryPath);
       }
-      if (is_file($destinationPath) && !@unlink($destinationPath)) {
+      if ($destinationPath !== null && is_file($destinationPath) && !@unlink($destinationPath)) {
         error_log('Could not remove evidence file after failed upload: ' . $destinationPath);
       }
       error_log(sprintf(

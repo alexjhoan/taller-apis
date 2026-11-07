@@ -1,8 +1,8 @@
 FROM php:8.2-apache
 
-# Instalar extensiones necesarias para MariaDB y Web Push
+# Instalar extensiones necesarias para MariaDB, Web Push y procesamiento de medios
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends libcurl4-openssl-dev libgmp-dev libonig-dev unzip \
+    && apt-get install -y --no-install-recommends ffmpeg libcurl4-openssl-dev libgmp-dev libonig-dev unzip \
     && docker-php-ext-install mysqli curl gmp mbstring \
     && rm -rf /var/lib/apt/lists/*
 

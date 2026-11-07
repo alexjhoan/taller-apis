@@ -434,21 +434,17 @@ mechanic: work_progress
 admin: reception, work_progress, final
 ```
 
-Tipos permitidos:
+Formatos permitidos:
 
 ```text
-image/jpeg
-image/png
-image/webp
-video/mp4
-video/quicktime
+Cualquier formato de imagen o video que FFmpeg pueda decodificar
 ```
 
-Tamaño máximo de entrada: `50 MB` por archivo. Las imágenes originales deben tener como máximo `40 megapíxeles` para limitar el consumo de memoria durante el procesamiento.
+Tamaño máximo de entrada: `50 MB` por archivo. Las imágenes y cada cuadro de video deben tener como máximo `40 megapíxeles` para limitar el consumo de memoria durante el procesamiento.
 
-Las imágenes JPEG, PNG y WebP se normalizan a JPG, se limitan a un máximo de `1000 px` en su lado mayor manteniendo la proporción y se comprimen. Las áreas transparentes se convierten con fondo blanco. Los videos MP4 y QuickTime/MOV se transcodifican a MP4/H.264, con un máximo de `1280 px` en su lado mayor, conservando proporción y audio. La compresión de video depende de su duración y contenido.
+Las imágenes decodificables por FFmpeg se normalizan a JPG, se limitan a un máximo de `1000 px` en su lado mayor manteniendo la proporción y se comprimen. Las áreas transparentes se convierten con fondo blanco. Los videos decodificables por FFmpeg se transcodifican a MP4/H.264, con un máximo de `1280 px` en su lado mayor, conservando proporción y audio. La compresión de video depende de su duración y contenido. El backend verifica los metadatos de salida antes de guardar cada archivo.
 
-Los archivos procesados se guardan bajo `assets/evidence/{id_order}/` con un nombre de fecha/hora del servidor (`YYYYMMDD_HHMMSS`) y un sufijo aleatorio para evitar colisiones en el mismo segundo. El servidor requiere FFmpeg accesible por PATH o mediante la variable de entorno `FFMPEG_BINARY`.
+Los archivos procesados se guardan bajo `assets/evidence/{id_order}/` con un nombre de fecha/hora del servidor (`YYYYMMDD_HHMMSS`) y un sufijo aleatorio para evitar colisiones en el mismo segundo. El servidor requiere FFmpeg y FFprobe accesibles por PATH o configurados mediante `FFMPEG_BINARY` y `FFPROBE_BINARY`. La imagen Docker instala ambos programas.
 
 Además de registrar la ruta, tipo de medio y `evidence_type` en `order_evidence`, cada carga agrega el nombre generado (sin la ruta) a `work_orders.images` para imágenes o `work_orders.videos` para videos. Los nombres se concatenan separados por comas y en orden de carga. Para reconstruir la ruta se combina el nombre con `assets/evidence/{id_order}/`. Ejecuta las migraciones `database/migrations/20261013_add_order_media_names.sql` y `database/migrations/20261027_add_order_evidence_type.sql` antes de habilitar estas cargas.
 

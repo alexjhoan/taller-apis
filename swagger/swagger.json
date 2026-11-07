@@ -625,7 +625,7 @@
         "security": [{ "BearerAuth": [] }],
         "tags": ["Evidence"],
         "summary": "Upload and optimize one order photo or video",
-        "description": "Requires evidence_type. Reception users may upload reception only; mechanics may upload work_progress only; admins may upload all three categories. Send one file per request (maximum 50 MB) and wait for its response before uploading the next file to preserve upload order. JPEG, PNG, and WebP images up to 40 megapixels are stored as compressed JPG with a maximum dimension of 1000 px and white background for transparency. MP4 and QuickTime videos are stored as H.264 MP4 with a maximum dimension of 1280 px. Processed files are stored in assets/evidence/{id_order}/ with a timestamp-based name and random collision-resistant suffix. The generated filename (without its path) is also appended, comma-separated, to work_orders.images or work_orders.videos, and the full path remains registered in order_evidence.file_url. Requires FFmpeg on the server PATH or configured via FFMPEG_BINARY.",
+        "description": "Requires evidence_type. Reception users may upload reception only; mechanics may upload work_progress only; admins may upload all three categories. Send one file per request (maximum 50 MB) and wait for its response before uploading the next file to preserve upload order. Any image or video format decodable by the installed FFmpeg is accepted, subject to valid media streams and a maximum input size of 40 megapixels per frame. Images are stored as compressed JPG with a maximum dimension of 1000 px and white background for transparency. Videos are transcoded and verified as H.264 MP4 with a maximum dimension of 1280 px. Processed files are stored in assets/evidence/{id_order}/ with a timestamp-based name and random collision-resistant suffix. The generated filename (without its path) is also appended, comma-separated, to work_orders.images or work_orders.videos, and the full path remains registered in order_evidence.file_url. Requires FFmpeg and FFprobe on the server PATH or configured via FFMPEG_BINARY and FFPROBE_BINARY.",
         "parameters": [{ "$ref": "#/components/parameters/idPath" }],
         "requestBody": {
           "required": true,
@@ -638,7 +638,7 @@
                   "file": {
                     "type": "string",
                     "format": "binary",
-                    "description": "One image (JPEG, PNG, WebP) or video (MP4, QuickTime/MOV), maximum 50 MB; images may not exceed 40 megapixels."
+                    "description": "One image or video in any format decodable by the installed FFmpeg, maximum 50 MB and 40 megapixels per frame."
                   },
                   "evidence_type": {
                     "type": "string",
@@ -670,7 +670,7 @@
           "403": { "description": "Role cannot upload the requested evidence_type" },
           "404": { "description": "Order not found" },
           "422": {
-            "description": "Missing or invalid evidence_type, invalid upload, unsupported media type, invalid image, or image exceeds 40 megapixels"
+            "description": "Missing or invalid evidence_type, invalid upload, unsupported or undecodable media, invalid image/video stream, or media exceeds 40 megapixels per frame"
           },
           "500": { "description": "Media processing, FFmpeg, storage, or database failure. The detailed error is included in statusText only when DISPLAY_ERRORS is enabled; otherwise a generic message is returned." }
         }
