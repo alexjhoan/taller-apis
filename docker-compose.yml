@@ -28,9 +28,9 @@ services:
       - DB_NAME=taller
       - DB_USER=usuario_php
       - DB_PASSWORD=MiPasswordDeUsuarioSeguro456!
-      - VAPID_PUBLIC_KEY=${VAPID_PUBLIC_KEY:-}
-      - VAPID_PRIVATE_KEY=${VAPID_PRIVATE_KEY:-}
-      - VAPID_SUBJECT=${VAPID_SUBJECT:-}
+      - VAPID_PUBLIC_KEY=BPR9RG5eDtJDFr4ZfO9Q6U1tx6AaiiJSr6fH1zASdZbJKTBkILRkCN-L2suPZBNqttPy7uzaiD0iiORnJcWWkWA
+      - VAPID_PRIVATE_KEY=sBphxL9hlRIo7w1Cr8XUqf9YVu1sLXoIUrvwLiJT6A0
+      - VAPID_SUBJECT=mailto:alexjhoan.25@gmail.com
     depends_on:
       - mariadb
 
