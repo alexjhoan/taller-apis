@@ -228,9 +228,10 @@ Campos obligatorios: `customer_name`, `customer_phone`, `vehicle_plate`, `vehicl
 `assigned_user_id` es opcional y admite un arreglo de IDs, una cadena JSON como `"[2,4]"`,
 un ID entero individual por compatibilidad o `null`. Cada ID debe corresponder a un usuario
 activo cuyo rol sea `admin` o `mechanic`; no se permiten IDs repetidos. Esto permite que
-admins de talleres pequeños también sean asignados como responsables de trabajo. Si un
-admin crea la orden con usuarios asignados, el backend genera `order_assigned` para todos
-los admins activos y cada usuario asignado.
+admins de talleres pequeños también sean asignados como responsables de trabajo. Crear una
+orden genera `order_created` para los admins activos; si la crea un mechanic, también se
+notifica a los usuarios asignados a la orden. Si un admin crea la orden con usuarios asignados,
+además se genera `order_assigned` para todos los admins activos y cada usuario asignado.
 Los cambios posteriores solo los puede hacer un admin y producen la misma alerta. La
 asignación define la audiencia; el frontend no envía una lista de destinatarios de alertas.
 
@@ -848,7 +849,8 @@ operación de la orden.
 
 Reglas de emisión:
 
-- Una orden creada por `mechanic` produce `order_created`.
+- Toda orden creada produce `order_created` para los admins activos. Si la crea un `mechanic`,
+  también reciben la alerta los usuarios asignados a la orden.
 - Una orden creada por `admin` con uno o varios mecánicos activos asignados, o cuya asignación cambia
   por un PATCH de admin, produce `order_assigned`; una orden admin sin asignación no lo hace.
 - Una transición real de estado produce `order_status_changed`.
@@ -913,8 +915,8 @@ curl -i -X PATCH "$BASE_URL/api/alerts" \
   -d '{"id":999999999}'
 curl -i "$BASE_URL/api/alerts?unread=1"
 
-# Crear una orden como mechanic produce order_created; como admin, incluir
-# assigned_user_id con IDs de usuarios activos admin/mechanic para generar order_assigned.
+# Crear una orden produce order_created; como admin, incluir assigned_user_id
+# con IDs de usuarios activos admin/mechanic también genera order_assigned.
 curl -i -X POST "$BASE_URL/api/orders" \
   -H "Authorization: Bearer $MECHANIC_TOKEN" \
   -H "Content-Type: application/json" \

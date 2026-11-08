@@ -18,9 +18,12 @@ El backend está preparado con estos componentes:
 - `POST /api/push/test`: solo admin; acepta destinatarios y contenido de prueba,
   o sin payload envía un mensaje fijo a todos los admins/mecánicos activos.
   No crea alertas persistentes.
-- Las alertas de órdenes notifican a admins. El PATCH de asignación notifica
-  solo a los mecánicos nuevos, y no envía asignaciones cuando la orden queda
-  `delivered` o `cancelled`.
+- Crear una orden genera una alerta persistente `order_created` y un Web Push
+  para admins activos suscritos. Las órdenes creadas por mechanics también
+  notifican a sus usuarios asignados.
+- Las demás alertas de órdenes notifican a admins. El PATCH de asignación
+  notifica solo a los mecánicos nuevos, y no envía asignaciones cuando la orden
+  queda `delivered` o `cancelled`.
 - Los fallos del servicio push se registran en el log del servidor; no deben
   revertir la orden o alerta ya guardada.
 
@@ -277,10 +280,13 @@ deshabilitarse mientras se procesa la petición.
 
 Con la suscripción real guardada:
 
-1. **Admin:** crear una orden nueva o realizar una operación que genere una
-   alerta (por ejemplo, un cambio real de estado). Debe llegar un push a los
-   admins activos suscritos.
-2. **Asignación:** iniciar sesión como admin y enviar un PATCH a
+1. **Crear orden:** como admin o mechanic, crear una orden. Debe guardarse una
+   alerta `order_created` visible para admins activos y llegar un push a los
+   admins activos suscritos. Si crea la orden un mechanic, los usuarios
+   asignados también reciben la alerta persistente.
+2. **Admin:** realizar otra operación que genere una alerta (por ejemplo, un
+   cambio real de estado). Debe llegar un push a los admins activos suscritos.
+3. **Asignación:** iniciar sesión como admin y enviar un PATCH a
    `/api/orders` con el ID de una orden activa y un `assigned_user_id` que
    agregue un mecánico suscrito:
 
@@ -298,11 +304,11 @@ Con la suscripción real guardada:
    orden ya tiene una lista de asignados, incluir los existentes y el nuevo.
    Solo los mecánicos agregados en este PATCH reciben el push; el mecánico
    asignado previamente no debe recibir uno repetido.
-3. Repetir el PATCH sin cambios y confirmar que no se genera otro aviso de
+4. Repetir el PATCH sin cambios y confirmar que no se genera otro aviso de
    asignación.
-4. Cambiar la orden a `delivered` o `cancelled` en el mismo PATCH que agrega a
+5. Cambiar la orden a `delivered` o `cancelled` en el mismo PATCH que agrega a
    un mecánico y confirmar que no se envía el push de asignación.
-5. Probar decisiones de presupuesto/repuestos usando las operaciones normales
+6. Probar decisiones de presupuesto/repuestos usando las operaciones normales
    del portal y confirmar que las alertas correspondientes generan push a
    admins suscritos.
 

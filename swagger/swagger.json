@@ -420,7 +420,7 @@
         "security": [{ "BearerAuth": [] }],
         "tags": ["Orders"],
         "summary": "Create vehicle reception order",
-        "description": "Creates the order and audit entry transactionally. After commit, sends a best-effort push to admins for the new order. Mechanic-created orders also emit order_created. When an admin creates an order assigned to active admins and/or mechanics, order_assigned is emitted to all active admins and each assigned user.",
+        "description": "Creates the order and audit entry transactionally. After commit, every new order emits a persistent order_created alert to active admins and a best-effort push to their subscribed devices. For mechanic-created orders, users assigned to the order also receive the persistent alert. When an admin creates an order assigned to active admins and/or mechanics, order_assigned is emitted to all active admins and each assigned user.",
         "requestBody": { "$ref": "#/components/requestBodies/Order" },
         "responses": {
           "201": { "description": "Created" },
@@ -1633,7 +1633,7 @@
                 "customer_phone": { "type": "string" },
                 "customer_email": { "type": "string", "nullable": true },
                 "assigned_user_id": {
-                  "description": "Optional assigned user IDs. Every ID must identify an active admin or mechanic. When set by an admin, the backend emits order_assigned to all active admins and each assigned user.",
+                  "description": "Optional assigned user IDs. Every ID must identify an active admin or mechanic. When set by an admin, the backend emits order_assigned to all active admins and each assigned user. For mechanic-created orders, assigned users also receive the order_created alert.",
                   "nullable": true,
                   "oneOf": [
                     { "type": "array", "items": { "type": "integer", "minimum": 1 }, "uniqueItems": true },

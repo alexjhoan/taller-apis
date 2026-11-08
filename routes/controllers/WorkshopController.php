@@ -759,24 +759,17 @@ class WorkshopController extends Controller
           "La orden {$data['vehicle_plate']} fue asignada a " . implode(', ', $mechanicNames) . '.',
           array_column($assignedMechanics, 'id')
         );
-      } elseif (($user['role'] ?? '') !== 'admin') {
-        $customerName = (string) $data['customer_name'];
-        $vehiclePlate = (string) $data['vehicle_plate'];
-        $this->insertAlertBestEffort(
-          $db,
-          $orderId,
-          'order_created',
-          "Nueva orden de {$customerName} ({$vehiclePlate}).",
-          $assignedMechanics === null ? null : array_column($assignedMechanics, 'id')
-        );
       }
-      if (($user['role'] ?? '') === 'admin') {
-        PushSender::sendToAdmins(
-          $db,
-          $orderId,
-          "Nueva orden de {$data['customer_name']} ({$data['vehicle_plate']})."
-        );
-      }
+      $createdOrderRecipients = ($user['role'] ?? '') === 'admin'
+        ? []
+        : ($assignedMechanics === null ? null : array_column($assignedMechanics, 'id'));
+      $this->insertAlertBestEffort(
+        $db,
+        $orderId,
+        'order_created',
+        "Nueva orden de {$data['customer_name']} ({$data['vehicle_plate']}).",
+        $createdOrderRecipients
+      );
       $this->jsonResponse(['id' => $orderId, 'token' => $token], 201, 'Order created');
     } catch (Throwable $error) {
       if ($transactionStarted) {
