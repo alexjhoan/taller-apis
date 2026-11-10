@@ -97,7 +97,13 @@ class Router
     // Limpieza de caracteres extraños para el nombre de la tabla
     // $table = preg_replace('/[^a-zA-Z0-9__-]/', '', $resource);
     $table = $resource;
-    if (in_array(strtolower($table), ['alerts', 'alert_recipients'], true)) {
+    $segments = array_values($segments);
+    $isTicketRoute = ($segments[0] ?? null) === 'api'
+      && in_array(strtolower($segments[1] ?? ''), ['tickets', 'ticket_replies'], true);
+    if (
+      $isTicketRoute
+      || in_array(strtolower($table), ['alerts', 'alert_recipients', 'tickets', 'ticket_replies'], true)
+    ) {
       $this->sendResponse(404, 'Recurso no encontrado');
     }
 

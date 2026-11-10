@@ -111,6 +111,34 @@ $router->patch('/api/orders/{id}/status', function () {
   require_once __DIR__ . '/controllers/WorkshopController.php';
   (new WorkshopController())->updateStatus();
 });
+$router->post('/api/orders/{id}/payment', function () {
+  require_once __DIR__ . '/controllers/WorkshopController.php';
+  (new WorkshopController())->createPayment();
+});
+$router->get('/api/payments', function () {
+  require_once __DIR__ . '/controllers/WorkshopController.php';
+  (new WorkshopController())->listPayments();
+});
+$router->post('/api/tickets', function () {
+  require_once __DIR__ . '/controllers/TicketsController.php';
+  (new TicketsController())->create();
+});
+$router->get('/api/tickets', function () {
+  require_once __DIR__ . '/controllers/TicketsController.php';
+  (new TicketsController())->index();
+});
+$router->get('/api/tickets/{id}', function () {
+  require_once __DIR__ . '/controllers/TicketsController.php';
+  (new TicketsController())->show();
+});
+$router->patch('/api/tickets/{id}', function () {
+  require_once __DIR__ . '/controllers/TicketsController.php';
+  (new TicketsController())->update();
+});
+$router->post('/api/tickets/{id}/reply', function () {
+  require_once __DIR__ . '/controllers/TicketsController.php';
+  (new TicketsController())->reply();
+});
 $router->post('/api/orders/{id}/evidence', function () {
   require_once __DIR__ . '/controllers/WorkshopController.php';
   (new WorkshopController())->uploadEvidence();

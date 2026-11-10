@@ -402,6 +402,38 @@ Marca la orden como `delivered`, registra `finished_at` si está vacío y guarda
 }
 ```
 
+## Pagos
+
+### POST `/api/orders/{id}/payment`
+
+Roles: `admin`, `mechanic`. El cuerpo debe estar vacío y la orden debe tener estado `delivered`. El backend también registra el pago automáticamente dentro de la transacción que entrega la orden. Si ya existe un pago, devuelve el registro existente sin duplicarlo.
+
+La mano de obra se calcula sumando `quantity * unit_price` de `budget_items` con `type = labor`. Los repuestos se calculan desde `work_orders.parts` (JSON), sumando `quantity * unit_price` solo para elementos con `approvalStatus = accepted`. El método inicial es `cash`.
+Si la orden todavía no está entregada, el endpoint responde `409`.
+
+#### Respuesta `200`
+
+```json
+{
+  "status": 200,
+  "body": {
+    "id": 42,
+    "order_id": 123,
+    "labor_amount": 150000,
+    "parts_amount": 320000,
+    "total_amount": 470000,
+    "created_at": "2026-11-10 14:30:00"
+  },
+  "statusText": "Pago registrado"
+}
+```
+
+### GET `/api/payments?order_id=123`
+
+Requiere JWT. `order_id` es opcional; al incluirlo, filtra el historial por orden. La respuesta es una lista ordenada de más reciente a más antiguo.
+
+Aplica la migración `database/migrations/20261110_create_payments.sql` antes de desplegar. La clave única `uk_payments_order_id` garantiza un solo pago por orden.
+
 ## 5. Evidencias
 
 Tabla: `order_evidence`.
@@ -1094,6 +1126,76 @@ PATCH agrega mecánicos a `assigned_user_id`, solo los mecánicos nuevos reciben
 el aviso de asignación; no se envía si la orden queda en estado `delivered` o
 `cancelled`. Un fallo del servicio push se registra internamente y no revierte
 la operación principal.
+
+## Tickets de soporte y sugerencias
+
+Ejecuta `database/migrations/20261110_create_tickets.sql` en cada entorno antes de usar estos endpoints. Las tablas `tickets` y `ticket_replies` están protegidas contra el CRUD dinámico: solo se pueden usar las operaciones explícitas documentadas aquí. Los IDs de usuario y admin se obtienen/validan con la sesión autenticada; nunca enviar `user_id` al crear.
+
+### POST `/api/tickets`
+
+Disponible para cualquier usuario autenticado activo.
+
+```json
+{
+  "title": "Problema con impresora",
+  "description": "La impresora no responde al enviar trabajos.",
+  "category": "soporte"
+}
+```
+
+`title` es obligatorio (máximo 255 caracteres), `description` es obligatoria y `category` acepta `soporte`, `sugerencia` o `bug` (por defecto `soporte`). Se crea siempre con estado `abierto`.
+
+Respuesta `201`:
+
+```json
+{
+  "status": 201,
+  "body": {
+    "id": 123,
+    "title": "Problema con impresora",
+    "category": "soporte",
+    "status": "abierto",
+    "created_at": "2026-11-10 10:00:00"
+  },
+  "statusText": "Ticket creado"
+}
+```
+
+### GET `/api/tickets`
+
+Solo admin. Parámetros opcionales: `page` (1), `per_page` (20, máximo 100), `status` (`abierto|en_proceso|cerrado`), `category` (`soporte|sugerencia|bug`), `date_from`/`date_to` (fechas inclusivas `YYYY-MM-DD`) y `search` (busca en título y descripción).
+
+La respuesta contiene `body.data` con tickets, autor y cantidad de respuestas, y `body.pagination` con `current_page`, `per_page`, `total` y `last_page`.
+
+### GET `/api/tickets/{id}`
+
+Solo admin. Devuelve los datos completos del ticket, autor, admin asignado y el hilo cronológico de respuestas. Responde `404` si el ticket no existe.
+
+### PATCH `/api/tickets/{id}`
+
+Solo admin. Enviar uno o varios campos; no se aceptan otros:
+
+```json
+{
+  "status": "en_proceso",
+  "category": "bug",
+  "assigned_admin_id": 3
+}
+```
+
+Valores válidos de estado: `abierto`, `en_proceso`, `cerrado`. El admin asignado debe existir y estar activo; enviar `null` para quitar la asignación. La respuesta `200` devuelve el detalle actualizado, incluidas las respuestas.
+
+### POST `/api/tickets/{id}/reply`
+
+Solo admin. Las respuestas son inmutables y se agregan al historial:
+
+```json
+{
+  "message": "Estamos revisando el problema."
+}
+```
+
+Responde `201` con la nueva respuesta y `is_admin_reply: 1`. Si el ticket estaba `abierto`, se cambia a `en_proceso` en la misma transacción; los estados `en_proceso` y `cerrado` se conservan. La respuesta automática por correo/push no está habilitada.
 
 ## 9. WhatsApp
 

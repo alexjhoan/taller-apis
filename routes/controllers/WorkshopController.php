@@ -227,6 +227,119 @@ class WorkshopController extends Controller
     $this->jsonResponse([], 500, 'Database error');
   }
 
+  private function normalizePaymentRow(array $payment): array
+  {
+    return [
+      'id' => (int) $payment['id'],
+      'order_id' => (int) $payment['order_id'],
+      'labor_amount' => (float) $payment['labor_amount'],
+      'parts_amount' => (float) $payment['parts_amount'],
+      'total_amount' => (float) $payment['total_amount'],
+      'created_at' => (string) $payment['created_at'],
+    ];
+  }
+
+  private function calculatePaymentAmounts(mysqli $db, int $orderId, mixed $partsValue): array
+  {
+    $laborStmt = $db->prepare(
+      "SELECT COALESCE(SUM(quantity * unit_price), 0) AS total
+       FROM budget_items
+       WHERE order_id = ? AND type = 'labor'"
+    );
+    $laborStmt->bind_param('i', $orderId);
+    $laborStmt->execute();
+    $laborAmount = number_format((float) $laborStmt->get_result()->fetch_assoc()['total'], 2, '.', '');
+    $laborStmt->close();
+
+    try {
+      $parts = json_decode((string) ($partsValue ?? '[]'), true, 512, JSON_THROW_ON_ERROR);
+    } catch (JsonException $error) {
+      throw new UnexpectedValueException('Order parts contain invalid JSON', 0, $error);
+    }
+    if (!is_array($parts)) {
+      throw new UnexpectedValueException('Order parts must be a JSON array');
+    }
+
+    $partsTotal = 0.0;
+    foreach ($parts as $part) {
+      if (!is_array($part)) {
+        throw new UnexpectedValueException('Order parts must contain JSON objects');
+      }
+      if (($part['approvalStatus'] ?? null) !== 'accepted' || !isset($part['unit_price'])) {
+        continue;
+      }
+      $quantity = $part['quantity'] ?? 0;
+      if (!is_numeric($quantity) || !is_numeric($part['unit_price'])) {
+        throw new UnexpectedValueException('Accepted order parts must have numeric quantity and unit_price');
+      }
+      $partsTotal += (float) $quantity * (float) $part['unit_price'];
+    }
+    $partsAmount = number_format($partsTotal, 2, '.', '');
+
+    return [
+      'labor_amount' => $laborAmount,
+      'parts_amount' => $partsAmount,
+      'total_amount' => number_format((float) $laborAmount + (float) $partsAmount, 2, '.', ''),
+    ];
+  }
+
+  private function getOrCreatePaymentForOrder(mysqli $db, int $orderId): ?array
+  {
+    $orderStmt = $db->prepare('SELECT id, status, parts FROM work_orders WHERE id = ? FOR UPDATE');
+    $orderStmt->bind_param('i', $orderId);
+    $orderStmt->execute();
+    $order = $orderStmt->get_result()->fetch_assoc();
+    $orderStmt->close();
+    if (!$order) {
+      throw new OutOfBoundsException('Order not found');
+    }
+    if ($order['status'] !== 'delivered') {
+      return null;
+    }
+
+    $existingStmt = $db->prepare(
+      'SELECT id, order_id, labor_amount, parts_amount, total_amount, created_at
+       FROM payments WHERE order_id = ? FOR UPDATE'
+    );
+    $existingStmt->bind_param('i', $orderId);
+    $existingStmt->execute();
+    $existing = $existingStmt->get_result()->fetch_assoc();
+    $existingStmt->close();
+    if ($existing) {
+      return $this->normalizePaymentRow($existing);
+    }
+
+    $amounts = $this->calculatePaymentAmounts($db, $orderId, $order['parts']);
+    $insertStmt = $db->prepare(
+      "INSERT INTO payments (order_id, labor_amount, parts_amount, total_amount, payment_method)
+       VALUES (?, ?, ?, ?, 'cash')"
+    );
+    $insertStmt->bind_param(
+      'isss',
+      $orderId,
+      $amounts['labor_amount'],
+      $amounts['parts_amount'],
+      $amounts['total_amount']
+    );
+    $insertStmt->execute();
+    $paymentId = $insertStmt->insert_id;
+    $insertStmt->close();
+
+    $paymentStmt = $db->prepare(
+      'SELECT id, order_id, labor_amount, parts_amount, total_amount, created_at
+       FROM payments WHERE id = ? LIMIT 1'
+    );
+    $paymentStmt->bind_param('i', $paymentId);
+    $paymentStmt->execute();
+    $payment = $paymentStmt->get_result()->fetch_assoc();
+    $paymentStmt->close();
+    if (!$payment) {
+      throw new RuntimeException('Could not load the created payment');
+    }
+
+    return $this->normalizePaymentRow($payment);
+  }
+
   private function assignedUserIds(mixed $value): array
   {
     if ($value === null || $value === '') {
@@ -742,6 +855,9 @@ class WorkshopController extends Controller
       $transactionStarted = true;
       $stmt->execute();
       $orderId = (int) $stmt->insert_id;
+      if (($data['status'] ?? null) === 'delivered') {
+        $this->getOrCreatePaymentForOrder($db, $orderId);
+      }
       $this->logOrderAction($db, $orderId, 'created', $actor);
       if (!$db->commit()) {
         throw new RuntimeException('Could not commit order creation and audit log');
@@ -831,6 +947,9 @@ class WorkshopController extends Controller
         $stmt->bind_param('sssi', $status, $status, $status, $id);
       }
       $stmt->execute();
+      if ($status === 'delivered') {
+        $this->getOrCreatePaymentForOrder($db, (int) $id);
+      }
       $changes = [];
       $statusChanged = $oldOrder['status'] !== $status;
       if ($statusChanged) {
@@ -867,6 +986,97 @@ class WorkshopController extends Controller
       if ($transactionStarted) {
         $db->rollback();
       }
+      $this->dbError($error);
+    }
+  }
+
+  public function createPayment(): void
+  {
+    $this->user(['admin', 'mechanic']);
+    $id = filter_var(
+      $this->params()['id'] ?? null,
+      FILTER_VALIDATE_INT,
+      ['options' => ['min_range' => 1]]
+    );
+    if ($id === false) {
+      $this->jsonResponse([], 422, 'Invalid order ID');
+    }
+
+    $data = $this->getBody();
+    if (!is_array($data) || $data !== []) {
+      $this->jsonResponse([], 422, 'Payment request body must be empty');
+    }
+
+    $db = DataBase::getConnection();
+    $transactionStarted = false;
+    try {
+      $db->begin_transaction();
+      $transactionStarted = true;
+      $payment = $this->getOrCreatePaymentForOrder($db, (int) $id);
+      if ($payment === null) {
+        $db->rollback();
+        $transactionStarted = false;
+        $this->jsonResponse([], 409, 'Order must be delivered before recording payment');
+      }
+      if (!$db->commit()) {
+        throw new RuntimeException('Could not commit order payment');
+      }
+      $transactionStarted = false;
+      $this->jsonResponse($payment, 200, 'Pago registrado');
+    } catch (OutOfBoundsException $error) {
+      if ($transactionStarted) {
+        $db->rollback();
+      }
+      $this->jsonResponse([], 404, 'Order not found');
+    } catch (Throwable $error) {
+      if ($transactionStarted) {
+        $db->rollback();
+      }
+      $this->dbError($error);
+    }
+  }
+
+  public function listPayments(): void
+  {
+    $this->user();
+    $orderId = null;
+    if (array_key_exists('order_id', $_GET)) {
+      $orderId = filter_var(
+        $_GET['order_id'],
+        FILTER_VALIDATE_INT,
+        ['options' => ['min_range' => 1]]
+      );
+      if ($orderId === false) {
+        $this->jsonResponse([], 422, 'Invalid order_id');
+      }
+    }
+
+    $db = DataBase::getConnection();
+    try {
+      if ($orderId === null) {
+        $result = $db->query(
+          'SELECT id, order_id, labor_amount, parts_amount, total_amount, created_at
+           FROM payments ORDER BY created_at DESC, id DESC'
+        );
+      } else {
+        $stmt = $db->prepare(
+          'SELECT id, order_id, labor_amount, parts_amount, total_amount, created_at
+           FROM payments WHERE order_id = ? ORDER BY created_at DESC, id DESC'
+        );
+        $stmt->bind_param('i', $orderId);
+        $stmt->execute();
+        $result = $stmt->get_result();
+      }
+
+      $payments = [];
+      while ($payment = $result->fetch_assoc()) {
+        $payments[] = $this->normalizePaymentRow($payment);
+      }
+      if (isset($stmt)) {
+        $stmt->close();
+      }
+      $this->jsonResponse($payments, 200, 'success', count($payments));
+    } catch (Throwable $error) {
       $this->dbError($error);
     }
   }
@@ -1367,7 +1577,13 @@ class WorkshopController extends Controller
         $stmt->close();
       }
 
-      $db->commit();
+      $resultingStatus = array_key_exists('status', $data) ? $data['status'] : $order['status'];
+      if ($resultingStatus === 'delivered') {
+        $this->getOrCreatePaymentForOrder($db, (int) $order['id']);
+      }
+      if (!$db->commit()) {
+        throw new RuntimeException('Could not commit public order update');
+      }
       $transactionStarted = false;
       $orderId = (int) $order['id'];
       if ($statusChanged) {
@@ -2003,6 +2219,10 @@ class WorkshopController extends Controller
       unset($value);
       call_user_func_array([$stmt, 'bind_param'], $bindParams);
       $stmt->execute();
+      $resultingStatus = array_key_exists('status', $data) ? $data['status'] : $oldOrder['status'];
+      if ($resultingStatus === 'delivered') {
+        $this->getOrCreatePaymentForOrder($db, (int) $id);
+      }
       if ($changes !== []) {
         $action = match ($changes['status']['to'] ?? null) {
           'delivered' => 'delivered',
@@ -2073,6 +2293,7 @@ class WorkshopController extends Controller
       $stmt = $db->prepare("UPDATE work_orders SET withdrawal_comment = ?, status = 'delivered', finished_at = COALESCE(finished_at, NOW()) WHERE id = ?");
       $stmt->bind_param('si', $comment, $id);
       $stmt->execute();
+      $this->getOrCreatePaymentForOrder($db, (int) $id);
       $changes = [];
       if ($oldOrder['status'] !== 'delivered') {
         $changes['status'] = ['from' => $oldOrder['status'], 'to' => 'delivered'];
