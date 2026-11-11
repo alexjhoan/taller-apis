@@ -115,6 +115,10 @@ $router->post('/api/orders/{id}/payment', function () {
   require_once __DIR__ . '/controllers/WorkshopController.php';
   (new WorkshopController())->createPayment();
 });
+$router->get('/api/payments/stats', function () {
+  require_once __DIR__ . '/controllers/WorkshopController.php';
+  (new WorkshopController())->paymentStats();
+});
 $router->get('/api/payments', function () {
   require_once __DIR__ . '/controllers/WorkshopController.php';
   (new WorkshopController())->listPayments();

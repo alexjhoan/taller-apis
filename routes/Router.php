@@ -100,9 +100,12 @@ class Router
     $segments = array_values($segments);
     $isTicketRoute = ($segments[0] ?? null) === 'api'
       && in_array(strtolower($segments[1] ?? ''), ['tickets', 'ticket_replies'], true);
+    $isPaymentRoute = ($segments[0] ?? null) === 'api'
+      && strtolower($segments[1] ?? '') === 'payments';
     if (
       $isTicketRoute
-      || in_array(strtolower($table), ['alerts', 'alert_recipients', 'tickets', 'ticket_replies'], true)
+      || $isPaymentRoute
+      || in_array(strtolower($table), ['alerts', 'alert_recipients', 'payments', 'tickets', 'ticket_replies'], true)
     ) {
       $this->sendResponse(404, 'Recurso no encontrado');
     }

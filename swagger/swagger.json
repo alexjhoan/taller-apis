@@ -424,7 +424,7 @@
         "security": [{ "BearerAuth": [] }],
         "tags": ["Orders"],
         "summary": "Create vehicle reception order",
-        "description": "Creates the order and audit entry transactionally. If the supplied status is delivered, also creates the payment in the same transaction. After commit, every new order emits a persistent order_created alert to active admins and a best-effort push to their subscribed devices. For mechanic-created orders, users assigned to the order also receive the persistent alert. When an admin creates an order assigned to active admins and/or mechanics, order_assigned is emitted to all active admins and each assigned user.",
+        "description": "Creates the order and audit entry transactionally. If the supplied status is delivered, also creates the payment in the same transaction. Payments sum service_items[].price for labor when service_items is non-NULL; otherwise legacy budget_items type=labor amounts are used. After commit, every new order emits a persistent order_created alert to active admins and a best-effort push to their subscribed devices. For mechanic-created orders, users assigned to the order also receive the persistent alert. When an admin creates an order assigned to active admins and/or mechanics, order_assigned is emitted to all active admins and each assigned user.",
         "requestBody": { "$ref": "#/components/requestBodies/Order" },
         "responses": {
           "201": { "description": "Created" },
@@ -438,7 +438,7 @@
         "security": [{ "BearerAuth": [] }],
         "tags": ["Orders"],
         "summary": "Update an existing work order",
-        "description": "After the order update commits, emits best-effort alerts and Web Push notifications for admin-visible order changes. When assigned_user_id gains a new active mechanic, that mechanic receives an assignment push unless the resulting order status is delivered or cancelled. Only admins may change assigned_user_id, and each target must be an active admin or mechanic. Repeated pending parts and unchanged status do not emit duplicate alerts. Budget acceptance uses the sum of budget_items quantity × unit_price. If the resulting status is delivered, a payment is created in the same transaction unless one already exists.",
+        "description": "After the order update commits, emits best-effort alerts and Web Push notifications for admin-visible order changes. When assigned_user_id gains a new active mechanic, that mechanic receives an assignment push unless the resulting order status is delivered or cancelled. Only admins may change assigned_user_id, and each target must be an active admin or mechanic. Repeated pending parts and unchanged status do not emit duplicate alerts. Budget acceptance uses the sum of budget_items quantity × unit_price. service_items may be updated as a JSON array or encoded JSON string; every item requires a numeric price. If the resulting status is delivered, a payment is created in the same transaction unless one already exists. Labor is the sum of service_items[].price when service_items is non-NULL; otherwise legacy budget_items type=labor amounts are used. Existing payments are not recalculated by later order updates.",
         "requestBody": { "$ref": "#/components/requestBodies/OrderPatch" },
         "responses": {
           "200": {
@@ -519,17 +519,74 @@
       "get": {
         "security": [{ "BearerAuth": [] }],
         "tags": ["Orders"],
-        "summary": "Get order with role-aware budget costs and evidence",
+        "summary": "Get order details, evidence, and associated payment",
+        "description": "Returns the order detail for an authenticated admin or mechanic, including role-aware budget costs, typed evidence objects, and the existing payment row (or null when no payment exists). assigned_user_id, checklist, parts, and service_items remain JSON-encoded strings in the order object. Evidence is returned separately as objects with id, url, evidence_type, type, and created_at.",
         "parameters": [{ "$ref": "#/components/parameters/idPath" }],
         "responses": {
           "200": {
-            "description": "Order, role-aware budget and evidence grouped by type and ordered by creation time ascending, filtered by authenticated role.",
+            "description": "Order, role-aware budget, typed evidence, and the existing payment if one has been recorded.",
             "content": {
               "application/json": {
-                "schema": { "$ref": "#/components/schemas/WorkOrderDetailResponse" }
+                "schema": { "$ref": "#/components/schemas/WorkOrderDetailResponse" },
+                "example": {
+                  "status": 200,
+                  "body": {
+                    "order": {
+                      "id": 4,
+                      "assigned_user_id": "[1]",
+                      "checklist": "[{\"title\":\"revisión\",\"completed\":true}]",
+                      "parts": "[{\"name\":\"aceite\",\"quantity\":5}]",
+                      "service_items": "[{\"description\":\"diagnostico\",\"price\":10000}]"
+                    },
+                    "budget": [],
+                    "evidence": [
+                      {
+                        "id": 7,
+                        "url": "https://example.com/assets/evidence/4/photo.jpg",
+                        "evidence_type": "work_progress",
+                        "type": "photo",
+                        "created_at": "2026-11-11 13:14:33"
+                      }
+                    ],
+                    "payment": {
+                      "id": 3,
+                      "order_id": 4,
+                      "labor_amount": 10000,
+                      "parts_amount": 50000,
+                      "total_amount": 60000,
+                      "created_at": "2026-11-11 13:15:15"
+                    }
+                  },
+                  "statusText": "success",
+                  "total": 1
+                }
               }
             }
-          }
+          },
+          "401": { "description": "Missing or invalid bearer token" },
+          "403": { "description": "Only admins and mechanics may view order details" },
+          "404": {
+            "description": "Order not found or ID is invalid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "required": ["status", "body", "statusText"],
+                  "properties": {
+                    "status": { "type": "integer", "enum": [404] },
+                    "body": { "type": "object", "nullable": true, "example": null },
+                    "statusText": { "type": "string", "enum": ["Order not found"] }
+                  }
+                },
+                "example": {
+                  "status": 404,
+                  "body": null,
+                  "statusText": "Order not found"
+                }
+              }
+            }
+          },
+          "500": { "description": "Database error" }
         }
       },
       "delete": {
@@ -665,9 +722,41 @@
       "get": {
         "security": [{ "BearerAuth": [] }],
         "tags": ["Payments"],
-        "summary": "List payment history",
-        "description": "Returns payment records ordered by creation time descending. Optionally filter by order_id.",
+        "summary": "List payments for administrators",
+        "description": "Returns paginated payments ordered by paid_at descending, with associated order data. Supports date range and payment method filters. The legacy order_id filter is also supported.",
         "parameters": [
+          {
+            "name": "page",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "minimum": 1, "default": 1 }
+          },
+          {
+            "name": "per_page",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "integer", "minimum": 1, "maximum": 100, "default": 20 }
+          },
+          {
+            "name": "date_from",
+            "in": "query",
+            "required": false,
+            "description": "Inclusive paid_at start date in YYYY-MM-DD format",
+            "schema": { "type": "string", "format": "date" }
+          },
+          {
+            "name": "date_to",
+            "in": "query",
+            "required": false,
+            "description": "Inclusive paid_at end date in YYYY-MM-DD format",
+            "schema": { "type": "string", "format": "date" }
+          },
+          {
+            "name": "method",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string", "enum": ["cash", "card", "transfer", "other"] }
+          },
           {
             "name": "order_id",
             "in": "query",
@@ -677,7 +766,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Payment history",
+            "description": "Paginated payment history",
             "content": {
               "application/json": {
                 "schema": { "$ref": "#/components/schemas/PaymentListResponse" }
@@ -685,7 +774,44 @@
             }
           },
           "401": { "description": "Missing or invalid bearer token" },
-          "422": { "description": "Invalid order_id" },
+          "403": { "description": "Administrator role required" },
+          "422": { "description": "Invalid pagination, date, method, or order_id parameter" },
+          "500": { "description": "Database error" }
+        }
+      }
+    },
+    "/api/payments/stats": {
+      "get": {
+        "security": [{ "BearerAuth": [] }],
+        "tags": ["Payments"],
+        "summary": "Get payment totals and method breakdown",
+        "description": "Admin-only aggregated totals for payments, optionally filtered by inclusive paid_at date range.",
+        "parameters": [
+          {
+            "name": "date_from",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string", "format": "date" }
+          },
+          {
+            "name": "date_to",
+            "in": "query",
+            "required": false,
+            "schema": { "type": "string", "format": "date" }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Payment totals and breakdown by method",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/PaymentStatsResponse" }
+              }
+            }
+          },
+          "401": { "description": "Missing or invalid bearer token" },
+          "403": { "description": "Administrator role required" },
+          "422": { "description": "Invalid date range" },
           "500": { "description": "Database error" }
         }
       }
@@ -1382,9 +1508,23 @@
         "properties": {
           "id": { "type": "integer", "example": 42 },
           "order_id": { "type": "integer", "example": 123 },
+          "order": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "id": { "type": "integer", "example": 123 },
+              "vehicle_plate": { "type": "string", "example": "ABC123" },
+              "customer_name": { "type": "string", "example": "Juan Pérez" }
+            },
+            "required": ["id", "vehicle_plate", "customer_name"]
+          },
           "labor_amount": { "type": "number", "format": "double", "example": 150000 },
           "parts_amount": { "type": "number", "format": "double", "example": 320000 },
           "total_amount": { "type": "number", "format": "double", "example": 470000 },
+          "payment_method": { "type": "string", "enum": ["cash", "card", "transfer", "other"] },
+          "reference": { "type": "string", "nullable": true },
+          "notes": { "type": "string", "nullable": true },
+          "paid_at": { "type": "string", "example": "2026-11-10 14:30:00" },
           "created_at": { "type": "string", "example": "2026-11-10 14:30:00" }
         },
         "required": ["id", "order_id", "labor_amount", "parts_amount", "total_amount", "created_at"]
@@ -1403,13 +1543,64 @@
         "properties": {
           "status": { "type": "integer", "example": 200 },
           "body": {
-            "type": "array",
-            "items": { "$ref": "#/components/schemas/Payment" }
+            "type": "object",
+            "properties": {
+              "data": {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/Payment" }
+              },
+              "pagination": {
+                "type": "object",
+                "properties": {
+                  "current_page": { "type": "integer", "example": 1 },
+                  "per_page": { "type": "integer", "example": 20 },
+                  "total": { "type": "integer", "example": 45 },
+                  "last_page": { "type": "integer", "example": 3 }
+                },
+                "required": ["current_page", "per_page", "total", "last_page"]
+              }
+            },
+            "required": ["data", "pagination"]
           },
-          "statusText": { "type": "string", "example": "success" },
-          "total": { "type": "integer", "example": 1 }
+          "statusText": { "type": "string", "example": "OK" }
         },
-        "required": ["status", "body", "statusText", "total"]
+        "required": ["status", "body", "statusText"]
+      },
+      "PaymentStatsResponse": {
+        "type": "object",
+        "properties": {
+          "status": { "type": "integer", "example": 200 },
+          "body": {
+            "type": "object",
+            "properties": {
+              "total_labor": { "type": "number", "format": "double", "example": 150000 },
+              "total_parts": { "type": "number", "format": "double", "example": 320000 },
+              "total_revenue": { "type": "number", "format": "double", "example": 470000 },
+              "total_payments": { "type": "integer", "example": 1 },
+              "by_method": {
+                "type": "object",
+                "properties": {
+                  "cash": { "$ref": "#/components/schemas/PaymentMethodStats" },
+                  "card": { "$ref": "#/components/schemas/PaymentMethodStats" },
+                  "transfer": { "$ref": "#/components/schemas/PaymentMethodStats" },
+                  "other": { "$ref": "#/components/schemas/PaymentMethodStats" }
+                },
+                "required": ["cash", "card", "transfer", "other"]
+              }
+            },
+            "required": ["total_labor", "total_parts", "total_revenue", "total_payments", "by_method"]
+          },
+          "statusText": { "type": "string", "example": "OK" }
+        },
+        "required": ["status", "body", "statusText"]
+      },
+      "PaymentMethodStats": {
+        "type": "object",
+        "properties": {
+          "amount": { "type": "number", "format": "double", "example": 470000 },
+          "count": { "type": "integer", "example": 1 }
+        },
+        "required": ["amount", "count"]
       },
       "TicketCreateResponse": {
         "type": "object",
@@ -1617,9 +1808,23 @@
                 "type": "array",
                 "description": "Evidence ordered by category and then creation time ascending.",
                 "items": { "$ref": "#/components/schemas/EvidenceItem" }
+              },
+              "payment": {
+                "type": "object",
+                "nullable": true,
+                "description": "Existing payment associated with the order; null if no payment has been recorded. This endpoint reads the stored payment and never recalculates it.",
+                "properties": {
+                  "id": { "type": "integer", "example": 3 },
+                  "order_id": { "type": "integer", "example": 4 },
+                  "labor_amount": { "type": "number", "format": "double", "example": 10000 },
+                  "parts_amount": { "type": "number", "format": "double", "example": 50000 },
+                  "total_amount": { "type": "number", "format": "double", "example": 60000 },
+                  "created_at": { "type": "string", "example": "2026-11-11 13:15:15" }
+                },
+                "required": ["id", "order_id", "labor_amount", "parts_amount", "total_amount", "created_at"]
               }
             },
-            "required": ["order", "budget", "evidence"]
+            "required": ["order", "budget", "evidence", "payment"]
           },
           "statusText": { "type": "string", "example": "success" },
           "total": { "type": "integer", "example": 1 }
@@ -1783,8 +1988,9 @@
           "mileage": { "type": "integer" },
           "fuel_level": { "type": "string" },
           "failure_description": { "type": "string" },
-          "parts": { "type": "array", "nullable": true, "items": { "type": "object" } },
-          "checklist": { "type": "array", "nullable": true },
+          "parts": { "type": "string", "nullable": true, "description": "JSON-encoded array returned as a string." },
+          "checklist": { "type": "string", "nullable": true, "description": "JSON-encoded array returned as a string." },
+          "service_items": { "type": "string", "nullable": true, "description": "JSON-encoded array returned as a string." },
           "status": { "type": "string", "nullable": true },
           "started_at": { "type": "string", "format": "date-time", "nullable": true },
           "finished_at": { "type": "string", "format": "date-time", "nullable": true },
@@ -2100,6 +2306,25 @@
                     { "type": "string", "example": "[{\"name\":\"part\",\"quantity\":1}]" }
                   ]
                 },
+                "service_items": {
+                  "description": "Service array, either as JSON or JSON-encoded string. Labor is the sum of each item's price.",
+                  "nullable": true,
+                  "oneOf": [
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": ["price"],
+                        "properties": {
+                          "description": { "type": "string" },
+                          "price": { "type": "number", "minimum": 0 }
+                        },
+                        "additionalProperties": true
+                      }
+                    },
+                    { "type": "string", "example": "[{\"description\":\"diagnostico\",\"price\":10000}]" }
+                  ]
+                },
                 "checklist": {
                   "description": "Checklist array, either as JSON or JSON-encoded string",
                   "oneOf": [{ "type": "array" }, { "type": "string", "example": "[]" }]
@@ -2157,6 +2382,25 @@
                   "oneOf": [
                     { "type": "array", "items": { "type": "object" } },
                     { "type": "string", "example": "[{\"name\":\"part\",\"quantity\":1}]" }
+                  ]
+                },
+                "service_items": {
+                  "description": "Service array, either as JSON or JSON-encoded string. Labor is the sum of each item's price.",
+                  "nullable": true,
+                  "oneOf": [
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": ["price"],
+                        "properties": {
+                          "description": { "type": "string" },
+                          "price": { "type": "number", "minimum": 0 }
+                        },
+                        "additionalProperties": true
+                      }
+                    },
+                    { "type": "string", "example": "[{\"description\":\"diagnostico\",\"price\":10000}]" }
                   ]
                 },
                 "checklist": {

@@ -308,6 +308,7 @@ Roles: `admin`, `mechanic`.
       "updated_at": "2026-09-22 10:00:00"
     },
     "budget": [],
+    "payment": null,
     "evidence": [
       {
         "id": 10,
@@ -323,8 +324,20 @@ Roles: `admin`, `mechanic`.
 }
 ```
 
+`payment` siempre está presente: es `null` si todavía no se registró un pago, o contiene el registro existente con `id`, `order_id`, `labor_amount`, `parts_amount`, `total_amount` y `created_at`. Este endpoint no recalcula el pago. `assigned_user_id`, `checklist`, `parts` y `service_items` se conservan como cadenas JSON dentro de `order`; `evidence` se devuelve aparte como arreglo de objetos tipados.
+
 Cuando el usuario es `mechanic` y `mechanic_cost_visibility` vale `0`, el backend omite `unit_price` y `supplier_cost` de cada ítem.
 `evidence` contiene objetos con `id`, `url`, `evidence_type`, `type` y `created_at`, ordenados por categoría (`reception`, `work_progress`, `final`) y luego por fecha ascendente. Los roles `admin` ven todos los tipos; `mechanic` ve recepción y progreso; `reception` ve solo recepción. Los archivos legacy sin fila en `order_evidence` se clasifican como `work_progress`. El mismo campo se incluye por orden en `GET /api/orders` y `GET /api/orders/delivered`; el portal público recibe todas las categorías.
+
+Si el ID no es numérico/positivo o no existe, responde HTTP `404`:
+
+```json
+{
+  "status": 404,
+  "body": null,
+  "statusText": "Order not found"
+}
+```
 
 ### GET `/api/orders/{id}/send-email`
 
@@ -408,8 +421,10 @@ Marca la orden como `delivered`, registra `finished_at` si está vacío y guarda
 
 Roles: `admin`, `mechanic`. El cuerpo debe estar vacío y la orden debe tener estado `delivered`. El backend también registra el pago automáticamente dentro de la transacción que entrega la orden. Si ya existe un pago, devuelve el registro existente sin duplicarlo.
 
-La mano de obra se calcula sumando `quantity * unit_price` de `budget_items` con `type = labor`. Los repuestos se calculan desde `work_orders.parts` (JSON), sumando `quantity * unit_price` solo para elementos con `approvalStatus = accepted`. El método inicial es `cash`.
+La mano de obra se calcula sumando `price` de los elementos de `work_orders.service_items` (JSON). Si `service_items` es `NULL` en una orden antigua, se usa como compatibilidad la suma de `quantity * unit_price` de `budget_items` con `type = labor`. Los repuestos se calculan desde `work_orders.parts` (JSON), sumando `quantity * unit_price` solo para elementos con `approvalStatus = accepted`. El método inicial es `cash`.
 Si la orden todavía no está entregada, el endpoint responde `409`.
+
+El PATCH `/api/orders` puede actualizar `service_items` como un arreglo JSON o como una cadena JSON; cada elemento debe incluir un `price` numérico. Ejecuta `database/migrations/20261111_add_order_service_items.sql` antes de enviar este campo. Los pagos ya registrados no se recalculan si luego se modifica la orden.
 
 #### Respuesta `200`
 
@@ -428,11 +443,17 @@ Si la orden todavía no está entregada, el endpoint responde `409`.
 }
 ```
 
-### GET `/api/payments?order_id=123`
+### GET `/api/payments`
 
-Requiere JWT. `order_id` es opcional; al incluirlo, filtra el historial por orden. La respuesta es una lista ordenada de más reciente a más antiguo.
+Solo admin. Parámetros opcionales: `page` (1), `per_page` (20, máximo 100), `date_from`/`date_to` (rango inclusivo `YYYY-MM-DD` sobre `paid_at`), `method` (`cash|card|transfer|other`) y `order_id` (filtro compatible para consultar una orden específica).
 
-Aplica la migración `database/migrations/20261110_create_payments.sql` antes de desplegar. La clave única `uk_payments_order_id` garantiza un solo pago por orden.
+La respuesta contiene `body.data`, con información del pago y la orden asociada, y `body.pagination` (`current_page`, `per_page`, `total`, `last_page`). Los resultados se ordenan por fecha de pago descendente.
+
+### GET `/api/payments/stats`
+
+Solo admin. Acepta `date_from` y `date_to` opcionales con formato `YYYY-MM-DD`, inclusivos. Devuelve `total_labor`, `total_parts`, `total_revenue`, `total_payments` y `by_method` con monto y conteo para `cash`, `card`, `transfer` y `other`.
+
+Aplica `database/migrations/20261110_create_payments.sql` y `database/migrations/20261110_create_payments_reporting_fields.sql` antes de desplegar. Esta última conserva como `paid_at` la fecha `created_at` de pagos existentes y agrega índices de fecha y método. La clave única `uk_payments_order_id` garantiza un solo pago por orden.
 
 ## 5. Evidencias
 

@@ -229,27 +229,139 @@ class WorkshopController extends Controller
 
   private function normalizePaymentRow(array $payment): array
   {
-    return [
+    $normalized = [
       'id' => (int) $payment['id'],
       'order_id' => (int) $payment['order_id'],
       'labor_amount' => (float) $payment['labor_amount'],
       'parts_amount' => (float) $payment['parts_amount'],
       'total_amount' => (float) $payment['total_amount'],
       'created_at' => (string) $payment['created_at'],
+      'paid_at' => (string) ($payment['paid_at'] ?? $payment['created_at']),
+    ];
+    if (array_key_exists('payment_method', $payment)) {
+      $normalized['payment_method'] = $payment['payment_method'];
+      $normalized['reference'] = $payment['reference'];
+      $normalized['notes'] = $payment['notes'];
+    }
+    if (array_key_exists('vehicle_plate', $payment) || array_key_exists('customer_name', $payment)) {
+      $normalized['order'] = $payment['vehicle_plate'] === null
+        ? null
+        : [
+          'id' => (int) $payment['order_id'],
+          'vehicle_plate' => $payment['vehicle_plate'],
+          'customer_name' => $payment['customer_name'],
+        ];
+    }
+
+    return $normalized;
+  }
+
+  private function bindPaymentParameters(mysqli_stmt $stmt, array &$values): void
+  {
+    if ($values === []) {
+      $stmt->execute();
+      return;
+    }
+
+    $types = '';
+    $parameters = [&$types];
+    foreach ($values as &$value) {
+      $types .= is_int($value) ? 'i' : 's';
+      $parameters[] = &$value;
+    }
+    unset($value);
+    call_user_func_array([$stmt, 'bind_param'], $parameters);
+    $stmt->execute();
+  }
+
+  private function validatedPaymentDate(string $name): ?string
+  {
+    if (!array_key_exists($name, $_GET)) {
+      return null;
+    }
+    $value = $_GET[$name];
+    if (
+      !is_string($value)
+      || !preg_match('/^\d{4}-\d{2}-\d{2}$/D', $value)
+    ) {
+      $this->jsonResponse([], 422, "Invalid {$name}; expected YYYY-MM-DD");
+    }
+    $date = DateTimeImmutable::createFromFormat('!Y-m-d', $value);
+    $errors = DateTimeImmutable::getLastErrors();
+    if (
+      $date === false
+      || $date->format('Y-m-d') !== $value
+      || ($errors !== false && ($errors['warning_count'] > 0 || $errors['error_count'] > 0))
+    ) {
+      $this->jsonResponse([], 422, "Invalid {$name}; expected YYYY-MM-DD");
+    }
+    return $value;
+  }
+
+  private function paymentFilters(): array
+  {
+    $conditions = [];
+    $values = [];
+    $dateFrom = $this->validatedPaymentDate('date_from');
+    $dateTo = $this->validatedPaymentDate('date_to');
+    if ($dateFrom !== null && $dateTo !== null && $dateFrom > $dateTo) {
+      $this->jsonResponse([], 422, 'date_from must be on or before date_to');
+    }
+    if ($dateFrom !== null) {
+      $conditions[] = 'p.paid_at >= ?';
+      $values[] = $dateFrom . ' 00:00:00';
+    }
+    if ($dateTo !== null) {
+      $conditions[] = 'p.paid_at <= ?';
+      $values[] = $dateTo . ' 23:59:59';
+    }
+    if (array_key_exists('method', $_GET)) {
+      $method = $_GET['method'];
+      if (!is_string($method) || !in_array($method, ['cash', 'card', 'transfer', 'other'], true)) {
+        $this->jsonResponse([], 422, 'Invalid payment method');
+      }
+      $conditions[] = 'p.payment_method = ?';
+      $values[] = $method;
+    }
+    if (array_key_exists('order_id', $_GET)) {
+      $orderId = filter_var(
+        $_GET['order_id'],
+        FILTER_VALIDATE_INT,
+        ['options' => ['min_range' => 1]]
+      );
+      if ($orderId === false) {
+        $this->jsonResponse([], 422, 'Invalid order_id');
+      }
+      $conditions[] = 'p.order_id = ?';
+      $values[] = (int) $orderId;
+    }
+
+    return [
+      $conditions === [] ? '' : ' WHERE ' . implode(' AND ', $conditions),
+      $values,
     ];
   }
 
-  private function calculatePaymentAmounts(mysqli $db, int $orderId, mixed $partsValue): array
+  private function calculatePaymentAmounts(
+    mysqli $db,
+    int $orderId,
+    mixed $partsValue,
+    mixed $serviceItemsValue = null
+  ): array
   {
-    $laborStmt = $db->prepare(
-      "SELECT COALESCE(SUM(quantity * unit_price), 0) AS total
-       FROM budget_items
-       WHERE order_id = ? AND type = 'labor'"
-    );
-    $laborStmt->bind_param('i', $orderId);
-    $laborStmt->execute();
-    $laborAmount = number_format((float) $laborStmt->get_result()->fetch_assoc()['total'], 2, '.', '');
-    $laborStmt->close();
+    $laborAmount = $this->serviceItemsTotal($serviceItemsValue);
+    if ($laborAmount === null) {
+      $laborStmt = $db->prepare(
+        "SELECT COALESCE(SUM(quantity * unit_price), 0) AS total
+         FROM budget_items
+         WHERE order_id = ? AND type = 'labor'"
+      );
+      $laborStmt->bind_param('i', $orderId);
+      $laborStmt->execute();
+      $laborAmount = (float) $laborStmt->get_result()->fetch_assoc()['total'];
+      $laborStmt->close();
+    }
+    $laborAmount = number_format($laborAmount, 2, '.', '');
 
     try {
       $parts = json_decode((string) ($partsValue ?? '[]'), true, 512, JSON_THROW_ON_ERROR);
@@ -283,9 +395,36 @@ class WorkshopController extends Controller
     ];
   }
 
+  private function serviceItemsTotal(mixed $value): ?float
+  {
+    if (is_string($value)) {
+      try {
+        $value = json_decode($value, true, 512, JSON_THROW_ON_ERROR);
+      } catch (JsonException $error) {
+        throw new UnexpectedValueException('Order service_items contain invalid JSON', 0, $error);
+      }
+    }
+    if ($value === null) {
+      return null;
+    }
+    if (!is_array($value) || array_is_list($value) === false) {
+      throw new UnexpectedValueException('Order service_items must be a JSON array');
+    }
+
+    $total = 0.0;
+    foreach ($value as $serviceItem) {
+      if (!is_array($serviceItem) || !isset($serviceItem['price']) || !is_numeric($serviceItem['price'])) {
+        throw new UnexpectedValueException('Each service item must have a numeric price');
+      }
+      $total += (float) $serviceItem['price'];
+    }
+
+    return $total;
+  }
+
   private function getOrCreatePaymentForOrder(mysqli $db, int $orderId): ?array
   {
-    $orderStmt = $db->prepare('SELECT id, status, parts FROM work_orders WHERE id = ? FOR UPDATE');
+    $orderStmt = $db->prepare('SELECT id, status, parts, service_items FROM work_orders WHERE id = ? FOR UPDATE');
     $orderStmt->bind_param('i', $orderId);
     $orderStmt->execute();
     $order = $orderStmt->get_result()->fetch_assoc();
@@ -298,7 +437,7 @@ class WorkshopController extends Controller
     }
 
     $existingStmt = $db->prepare(
-      'SELECT id, order_id, labor_amount, parts_amount, total_amount, created_at
+      'SELECT id, order_id, labor_amount, parts_amount, total_amount, created_at, paid_at
        FROM payments WHERE order_id = ? FOR UPDATE'
     );
     $existingStmt->bind_param('i', $orderId);
@@ -309,7 +448,7 @@ class WorkshopController extends Controller
       return $this->normalizePaymentRow($existing);
     }
 
-    $amounts = $this->calculatePaymentAmounts($db, $orderId, $order['parts']);
+    $amounts = $this->calculatePaymentAmounts($db, $orderId, $order['parts'], $order['service_items']);
     $insertStmt = $db->prepare(
       "INSERT INTO payments (order_id, labor_amount, parts_amount, total_amount, payment_method)
        VALUES (?, ?, ?, ?, 'cash')"
@@ -326,7 +465,7 @@ class WorkshopController extends Controller
     $insertStmt->close();
 
     $paymentStmt = $db->prepare(
-      'SELECT id, order_id, labor_amount, parts_amount, total_amount, created_at
+      'SELECT id, order_id, labor_amount, parts_amount, total_amount, created_at, paid_at
        FROM payments WHERE id = ? LIMIT 1'
     );
     $paymentStmt->bind_param('i', $paymentId);
@@ -727,6 +866,26 @@ class WorkshopController extends Controller
       return null;
     }
 
+    if ($field === 'service_items') {
+      if (is_string($value)) {
+        try {
+          $value = json_decode($value, true, 512, JSON_THROW_ON_ERROR);
+        } catch (JsonException $error) {
+          $this->jsonResponse([], 422, 'service_items must contain valid JSON');
+        }
+      }
+      try {
+        if ($this->serviceItemsTotal($value) === null) {
+          $this->jsonResponse([], 422, 'service_items must be a JSON array');
+        }
+        return json_encode($value, JSON_THROW_ON_ERROR);
+      } catch (UnexpectedValueException $error) {
+        $this->jsonResponse([], 422, $error->getMessage());
+      } catch (JsonException $error) {
+        $this->jsonResponse([], 422, 'service_items contains invalid JSON data');
+      }
+    }
+
     if (str_contains($databaseType, 'json')) {
       if (is_string($value)) {
         try {
@@ -1038,49 +1197,134 @@ class WorkshopController extends Controller
 
   public function listPayments(): void
   {
-    $this->user();
-    $orderId = null;
-    if (array_key_exists('order_id', $_GET)) {
-      $orderId = filter_var(
-        $_GET['order_id'],
-        FILTER_VALIDATE_INT,
-        ['options' => ['min_range' => 1]]
-      );
-      if ($orderId === false) {
-        $this->jsonResponse([], 422, 'Invalid order_id');
-      }
+    $this->user(['admin']);
+    $pageValue = $_GET['page'] ?? '1';
+    $perPageValue = $_GET['per_page'] ?? '20';
+    if (!is_string($pageValue) || !is_string($perPageValue)) {
+      $this->jsonResponse([], 422, 'Invalid pagination parameters');
+    }
+    $page = filter_var($pageValue, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]]);
+    $perPage = filter_var(
+      $perPageValue,
+      FILTER_VALIDATE_INT,
+      ['options' => ['min_range' => 1, 'max_range' => 100]]
+    );
+    if ($page === false || $perPage === false || $page > intdiv(PHP_INT_MAX, $perPage) + 1) {
+      $this->jsonResponse([], 422, 'Invalid pagination parameters');
     }
 
+    [$where, $values] = $this->paymentFilters();
     $db = DataBase::getConnection();
     try {
-      if ($orderId === null) {
-        $result = $db->query(
-          'SELECT id, order_id, labor_amount, parts_amount, total_amount, created_at
-           FROM payments ORDER BY created_at DESC, id DESC'
-        );
-      } else {
-        $stmt = $db->prepare(
-          'SELECT id, order_id, labor_amount, parts_amount, total_amount, created_at
-           FROM payments WHERE order_id = ? ORDER BY created_at DESC, id DESC'
-        );
-        $stmt->bind_param('i', $orderId);
-        $stmt->execute();
-        $result = $stmt->get_result();
-      }
+      $countStmt = $db->prepare("SELECT COUNT(*) AS total FROM payments p{$where}");
+      $countValues = $values;
+      $this->bindPaymentParameters($countStmt, $countValues);
+      $total = (int) $countStmt->get_result()->fetch_assoc()['total'];
+      $countStmt->close();
 
+      $offset = ($page - 1) * $perPage;
+      $listStmt = $db->prepare(
+        "SELECT p.id, p.order_id, p.labor_amount, p.parts_amount, p.total_amount,
+                p.payment_method, p.reference, p.notes, p.created_at, p.paid_at,
+                w.vehicle_plate, w.customer_name
+         FROM payments p
+         LEFT JOIN work_orders w ON w.id = p.order_id
+         {$where}
+         ORDER BY p.paid_at DESC, p.id DESC
+         LIMIT ? OFFSET ?"
+      );
+      $listValues = [...$values, $perPage, $offset];
+      $this->bindPaymentParameters($listStmt, $listValues);
+      $result = $listStmt->get_result();
       $payments = [];
       while ($payment = $result->fetch_assoc()) {
         $payments[] = $this->normalizePaymentRow($payment);
       }
-      if (isset($stmt)) {
-        $stmt->close();
-      }
-      $this->jsonResponse($payments, 200, 'success', count($payments));
+      $listStmt->close();
+      $this->jsonResponse([
+        'data' => $payments,
+        'pagination' => [
+          'current_page' => $page,
+          'per_page' => $perPage,
+          'total' => $total,
+          'last_page' => max(1, (int) ceil($total / $perPage)),
+        ],
+      ], 200, 'OK');
     } catch (Throwable $error) {
       $this->dbError($error);
     }
   }
 
+  public function paymentStats(): void
+  {
+    $this->user(['admin']);
+    $conditions = [];
+    $values = [];
+    $dateFrom = $this->validatedPaymentDate('date_from');
+    $dateTo = $this->validatedPaymentDate('date_to');
+    if ($dateFrom !== null && $dateTo !== null && $dateFrom > $dateTo) {
+      $this->jsonResponse([], 422, 'date_from must be on or before date_to');
+    }
+    if ($dateFrom !== null) {
+      $conditions[] = 'paid_at >= ?';
+      $values[] = $dateFrom . ' 00:00:00';
+    }
+    if ($dateTo !== null) {
+      $conditions[] = 'paid_at <= ?';
+      $values[] = $dateTo . ' 23:59:59';
+    }
+    $where = $conditions === [] ? '' : ' WHERE ' . implode(' AND ', $conditions);
+
+    $db = DataBase::getConnection();
+    try {
+      $totalsStmt = $db->prepare(
+        "SELECT COALESCE(SUM(labor_amount), 0) AS total_labor,
+                COALESCE(SUM(parts_amount), 0) AS total_parts,
+                COALESCE(SUM(total_amount), 0) AS total_revenue,
+                COUNT(*) AS total_payments
+         FROM payments{$where}"
+      );
+      $totalValues = $values;
+      $this->bindPaymentParameters($totalsStmt, $totalValues);
+      $totals = $totalsStmt->get_result()->fetch_assoc();
+      $totalsStmt->close();
+
+      $methodsStmt = $db->prepare(
+        "SELECT payment_method, COALESCE(SUM(total_amount), 0) AS amount, COUNT(*) AS count
+         FROM payments{$where}
+         GROUP BY payment_method"
+      );
+      $methodValues = $values;
+      $this->bindPaymentParameters($methodsStmt, $methodValues);
+      $methodsResult = $methodsStmt->get_result();
+      $byMethod = [
+        'cash' => ['amount' => 0.0, 'count' => 0],
+        'card' => ['amount' => 0.0, 'count' => 0],
+        'transfer' => ['amount' => 0.0, 'count' => 0],
+        'other' => ['amount' => 0.0, 'count' => 0],
+      ];
+      while ($method = $methodsResult->fetch_assoc()) {
+        $methodName = $method['payment_method'];
+        if (is_string($methodName) && array_key_exists($methodName, $byMethod)) {
+          $byMethod[$methodName] = [
+            'amount' => (float) $method['amount'],
+            'count' => (int) $method['count'],
+          ];
+        }
+      }
+      $methodsStmt->close();
+
+      $this->jsonResponse([
+        'total_labor' => (float) $totals['total_labor'],
+        'total_parts' => (float) $totals['total_parts'],
+        'total_revenue' => (float) $totals['total_revenue'],
+        'total_payments' => (int) $totals['total_payments'],
+        'by_method' => $byMethod,
+      ], 200, 'OK');
+    } catch (Throwable $error) {
+      $this->dbError($error);
+    }
+  }
   public function uploadEvidence(): void
   {
     $user = $this->user(['admin', 'mechanic', 'reception']);
@@ -1624,8 +1868,15 @@ class WorkshopController extends Controller
   public function getOrder(): void
   {
     $user = $this->user(['admin', 'mechanic']);
-    $id = filter_var($this->params()['id'] ?? null, FILTER_VALIDATE_INT);
-    if (!$id) $this->jsonResponse([], 422, 'Invalid order');
+    $id = filter_var(
+      $this->params()['id'] ?? null,
+      FILTER_VALIDATE_INT,
+      ['options' => ['min_range' => 1]]
+    );
+    if ($id === false) {
+      $this->jsonResponse(null, 404, 'Order not found');
+    }
+
     $db = DataBase::getConnection();
     try {
       $stmt = $db->prepare('SELECT * FROM work_orders WHERE id = ?');
@@ -1634,7 +1885,11 @@ class WorkshopController extends Controller
       $orderResult = $stmt->get_result();
       $total = $orderResult->num_rows;
       $order = $orderResult->fetch_assoc();
-      if (!$order) $this->jsonResponse([], 404, 'Order not found');
+      $stmt->close();
+      if (!$order) {
+        $this->jsonResponse(null, 404, 'Order not found');
+      }
+
       $items = $db->query("SELECT * FROM budget_items WHERE order_id = {$id} ORDER BY id")->fetch_all(MYSQLI_ASSOC);
       $setting = $db->query("SELECT setting_value FROM app_settings WHERE setting_key = 'mechanic_cost_visibility'")->fetch_assoc();
       if (($user['role'] ?? '') === 'mechanic' && ($setting['setting_value'] ?? '0') !== '1') {
@@ -1650,7 +1905,32 @@ class WorkshopController extends Controller
       );
       $evidence = $evidenceByOrder[(int) $id] ?? [];
       $this->setVisibleEvidenceMediaFields($order, $evidence);
-      $this->jsonResponse(['order' => $order, 'budget' => $items, 'evidence' => $evidence], 200, 'success', $total);
+
+      $paymentStmt = $db->prepare(
+        'SELECT id, order_id, labor_amount, parts_amount, total_amount, created_at
+         FROM payments WHERE order_id = ? LIMIT 1'
+      );
+      $paymentStmt->bind_param('i', $id);
+      $paymentStmt->execute();
+      $payment = $paymentStmt->get_result()->fetch_assoc();
+      $paymentStmt->close();
+      if ($payment !== null) {
+        $payment = [
+          'id' => (int) $payment['id'],
+          'order_id' => (int) $payment['order_id'],
+          'labor_amount' => (float) $payment['labor_amount'],
+          'parts_amount' => (float) $payment['parts_amount'],
+          'total_amount' => (float) $payment['total_amount'],
+          'created_at' => (string) $payment['created_at'],
+        ];
+      }
+
+      $this->jsonResponse([
+        'order' => $order,
+        'budget' => $items,
+        'evidence' => $evidence,
+        'payment' => $payment,
+      ], 200, 'success', $total);
     } catch (Throwable $error) {
       $this->dbError($error);
     }
