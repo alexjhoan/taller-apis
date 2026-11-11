@@ -445,15 +445,15 @@ El PATCH `/api/orders` puede actualizar `service_items` como un arreglo JSON o c
 
 ### GET `/api/payments`
 
-Solo admin. Parámetros opcionales: `page` (1), `per_page` (20, máximo 100), `date_from`/`date_to` (rango inclusivo `YYYY-MM-DD` sobre `paid_at`), `method` (`cash|card|transfer|other`) y `order_id` (filtro compatible para consultar una orden específica).
+Solo admin. Parámetros opcionales: `page` (1), `per_page` (20, máximo 100), `date_from`/`date_to` (rango inclusivo `YYYY-MM-DD` sobre `created_at`), `method` (`cash|card|transfer|other`) y `order_id` (filtro compatible para consultar una orden específica).
 
-La respuesta contiene `body.data`, con información del pago y la orden asociada, y `body.pagination` (`current_page`, `per_page`, `total`, `last_page`). Los resultados se ordenan por fecha de pago descendente.
+La respuesta contiene `body.data`, con información del pago y la orden asociada, y `body.pagination` (`current_page`, `per_page`, `total`, `last_page`). Los resultados se ordenan por `created_at` descendente.
 
 ### GET `/api/payments/stats`
 
 Solo admin. Acepta `date_from` y `date_to` opcionales con formato `YYYY-MM-DD`, inclusivos. Devuelve `total_labor`, `total_parts`, `total_revenue`, `total_payments` y `by_method` con monto y conteo para `cash`, `card`, `transfer` y `other`.
 
-Aplica `database/migrations/20261110_create_payments.sql` y `database/migrations/20261110_create_payments_reporting_fields.sql` antes de desplegar. Esta última conserva como `paid_at` la fecha `created_at` de pagos existentes y agrega índices de fecha y método. La clave única `uk_payments_order_id` garantiza un solo pago por orden.
+Aplica `database/migrations/20261110_create_payments.sql` y `database/migrations/20261110_create_payments_reporting_fields.sql` antes de desplegar. Los filtros y reportes usan `created_at` como fecha de registro del pago; la migración de reporting asegura los índices de fecha y método. La clave única `uk_payments_order_id` garantiza un solo pago por orden.
 
 ## 5. Evidencias
 

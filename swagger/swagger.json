@@ -723,7 +723,7 @@
         "security": [{ "BearerAuth": [] }],
         "tags": ["Payments"],
         "summary": "List payments for administrators",
-        "description": "Returns paginated payments ordered by paid_at descending, with associated order data. Supports date range and payment method filters. The legacy order_id filter is also supported.",
+        "description": "Returns paginated payments ordered by created_at descending, with associated order data. Supports an inclusive date range over created_at and payment method filters. The legacy order_id filter is also supported.",
         "parameters": [
           {
             "name": "page",
@@ -741,14 +741,14 @@
             "name": "date_from",
             "in": "query",
             "required": false,
-            "description": "Inclusive paid_at start date in YYYY-MM-DD format",
+            "description": "Inclusive created_at start date in YYYY-MM-DD format",
             "schema": { "type": "string", "format": "date" }
           },
           {
             "name": "date_to",
             "in": "query",
             "required": false,
-            "description": "Inclusive paid_at end date in YYYY-MM-DD format",
+            "description": "Inclusive created_at end date in YYYY-MM-DD format",
             "schema": { "type": "string", "format": "date" }
           },
           {
@@ -785,7 +785,7 @@
         "security": [{ "BearerAuth": [] }],
         "tags": ["Payments"],
         "summary": "Get payment totals and method breakdown",
-        "description": "Admin-only aggregated totals for payments, optionally filtered by inclusive paid_at date range.",
+        "description": "Admin-only aggregated totals for payments, optionally filtered by inclusive created_at date range.",
         "parameters": [
           {
             "name": "date_from",
@@ -1524,7 +1524,6 @@
           "payment_method": { "type": "string", "enum": ["cash", "card", "transfer", "other"] },
           "reference": { "type": "string", "nullable": true },
           "notes": { "type": "string", "nullable": true },
-          "paid_at": { "type": "string", "example": "2026-11-10 14:30:00" },
           "created_at": { "type": "string", "example": "2026-11-10 14:30:00" }
         },
         "required": ["id", "order_id", "labor_amount", "parts_amount", "total_amount", "created_at"]

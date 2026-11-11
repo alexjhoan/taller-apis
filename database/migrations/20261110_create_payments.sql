@@ -9,13 +9,11 @@ CREATE TABLE IF NOT EXISTS payments (
   payment_method ENUM('cash', 'card', 'transfer', 'other') DEFAULT 'cash',
   reference VARCHAR(100) DEFAULT NULL COMMENT 'Número de transacción, autorización, etc.',
   notes TEXT DEFAULT NULL COMMENT 'Observaciones del cobro',
-  paid_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP COMMENT 'Cuándo se registró el pago',
   created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
   PRIMARY KEY (id),
   UNIQUE KEY uk_payments_order_id (order_id),
   KEY idx_payments_created_at (created_at),
-  KEY idx_payments_paid_at (paid_at),
   KEY idx_payments_payment_method (payment_method),
   CONSTRAINT fk_payments_order_id FOREIGN KEY (order_id) REFERENCES work_orders (id) ON DELETE RESTRICT
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;

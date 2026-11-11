@@ -236,7 +236,6 @@ class WorkshopController extends Controller
       'parts_amount' => (float) $payment['parts_amount'],
       'total_amount' => (float) $payment['total_amount'],
       'created_at' => (string) $payment['created_at'],
-      'paid_at' => (string) ($payment['paid_at'] ?? $payment['created_at']),
     ];
     if (array_key_exists('payment_method', $payment)) {
       $normalized['payment_method'] = $payment['payment_method'];
@@ -308,11 +307,11 @@ class WorkshopController extends Controller
       $this->jsonResponse([], 422, 'date_from must be on or before date_to');
     }
     if ($dateFrom !== null) {
-      $conditions[] = 'p.paid_at >= ?';
+      $conditions[] = 'p.created_at >= ?';
       $values[] = $dateFrom . ' 00:00:00';
     }
     if ($dateTo !== null) {
-      $conditions[] = 'p.paid_at <= ?';
+      $conditions[] = 'p.created_at <= ?';
       $values[] = $dateTo . ' 23:59:59';
     }
     if (array_key_exists('method', $_GET)) {
@@ -437,7 +436,7 @@ class WorkshopController extends Controller
     }
 
     $existingStmt = $db->prepare(
-      'SELECT id, order_id, labor_amount, parts_amount, total_amount, created_at, paid_at
+      'SELECT id, order_id, labor_amount, parts_amount, total_amount, created_at
        FROM payments WHERE order_id = ? FOR UPDATE'
     );
     $existingStmt->bind_param('i', $orderId);
@@ -465,7 +464,7 @@ class WorkshopController extends Controller
     $insertStmt->close();
 
     $paymentStmt = $db->prepare(
-      'SELECT id, order_id, labor_amount, parts_amount, total_amount, created_at, paid_at
+      'SELECT id, order_id, labor_amount, parts_amount, total_amount, created_at
        FROM payments WHERE id = ? LIMIT 1'
     );
     $paymentStmt->bind_param('i', $paymentId);
@@ -1225,12 +1224,12 @@ class WorkshopController extends Controller
       $offset = ($page - 1) * $perPage;
       $listStmt = $db->prepare(
         "SELECT p.id, p.order_id, p.labor_amount, p.parts_amount, p.total_amount,
-                p.payment_method, p.reference, p.notes, p.created_at, p.paid_at,
+                p.payment_method, p.reference, p.notes, p.created_at,
                 w.vehicle_plate, w.customer_name
          FROM payments p
          LEFT JOIN work_orders w ON w.id = p.order_id
          {$where}
-         ORDER BY p.paid_at DESC, p.id DESC
+         ORDER BY p.created_at DESC, p.id DESC
          LIMIT ? OFFSET ?"
       );
       $listValues = [...$values, $perPage, $offset];
@@ -1266,11 +1265,11 @@ class WorkshopController extends Controller
       $this->jsonResponse([], 422, 'date_from must be on or before date_to');
     }
     if ($dateFrom !== null) {
-      $conditions[] = 'paid_at >= ?';
+      $conditions[] = 'created_at >= ?';
       $values[] = $dateFrom . ' 00:00:00';
     }
     if ($dateTo !== null) {
-      $conditions[] = 'paid_at <= ?';
+      $conditions[] = 'created_at <= ?';
       $values[] = $dateTo . ' 23:59:59';
     }
     $where = $conditions === [] ? '' : ' WHERE ' . implode(' AND ', $conditions);
