@@ -86,6 +86,29 @@ class TicketsController extends Controller
     return $body;
   }
 
+  private function validateUpdatedBy(array $data, array $user): void
+  {
+    if (!array_key_exists('updated_by', $data)) {
+      return;
+    }
+    if (!is_string($data['updated_by']) || $data['updated_by'] === '') {
+      $this->jsonResponse([], 422, 'updated_by must be a non-empty JSON string');
+    }
+
+    try {
+      $updatedBy = json_decode($data['updated_by'], true, 512, JSON_THROW_ON_ERROR);
+    } catch (JsonException $error) {
+      $this->jsonResponse([], 422, 'updated_by must contain valid JSON');
+    }
+
+    $updatedById = is_array($updatedBy)
+      ? filter_var($updatedBy['id'] ?? null, FILTER_VALIDATE_INT, ['options' => ['min_range' => 1]])
+      : false;
+    if ($updatedById === false || $updatedById !== $user['id']) {
+      $this->jsonResponse([], 403, 'updated_by does not match the authenticated user');
+    }
+  }
+
   private function ticketId(): int
   {
     $id = filter_var(
@@ -168,9 +191,10 @@ class TicketsController extends Controller
   {
     $user = $this->authenticatedUser();
     $data = $this->requestBody();
-    if (array_diff(array_keys($data), ['title', 'description', 'category']) !== []) {
-      $this->jsonResponse([], 422, 'Only title, description, and category are allowed');
+    if (array_diff(array_keys($data), ['title', 'description', 'category', 'updated_by']) !== []) {
+      $this->jsonResponse([], 422, 'Only title, description, category, and updated_by are allowed');
     }
+    $this->validateUpdatedBy($data, $user);
 
     $title = $data['title'] ?? null;
     $description = $data['description'] ?? null;
@@ -358,12 +382,17 @@ class TicketsController extends Controller
     $user = $this->requireAdmin();
     $ticketId = $this->ticketId();
     $data = $this->requestBody();
-    $allowedFields = ['status', 'category', 'assigned_admin_id'];
+    $allowedFields = ['status', 'category', 'assigned_admin_id', 'updated_by'];
     if (
       $data === []
       || array_diff(array_keys($data), $allowedFields) !== []
     ) {
-      $this->jsonResponse([], 422, 'Provide status, category, and/or assigned_admin_id only');
+      $this->jsonResponse([], 422, 'Only status, category, assigned_admin_id, and updated_by are allowed');
+    }
+    $this->validateUpdatedBy($data, $user);
+    unset($data['updated_by']);
+    if ($data === []) {
+      $this->jsonResponse([], 422, 'Provide status, category, and/or assigned_admin_id');
     }
     if (array_key_exists('status', $data) && (!is_string($data['status']) || !in_array($data['status'], self::STATUSES, true))) {
       $this->jsonResponse([], 422, 'Invalid ticket status');

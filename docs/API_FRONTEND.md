@@ -1160,11 +1160,12 @@ Disponible para cualquier usuario autenticado activo.
 {
   "title": "Problema con impresora",
   "description": "La impresora no responde al enviar trabajos.",
-  "category": "soporte"
+  "category": "soporte",
+  "updated_by": "{\"id\":1,\"firstName\":\"Alex\",\"lastName\":\"Ramirez\",\"role\":\"admin\"}"
 }
 ```
 
-`title` es obligatorio (máximo 255 caracteres), `description` es obligatoria y `category` acepta `soporte`, `sugerencia` o `bug` (por defecto `soporte`). Se crea siempre con estado `abierto`.
+`title` es obligatorio (máximo 255 caracteres), `description` es obligatoria y `category` acepta `soporte`, `sugerencia` o `bug` (por defecto `soporte`). Se crea siempre con estado `abierto`. `updated_by` es opcional, se acepta como JSON string solo si su `id` coincide con el usuario autenticado; el backend ignora su nombre/rol y no lo guarda. El propietario del ticket siempre se deriva del JWT.
 
 Respuesta `201`:
 
@@ -1200,11 +1201,12 @@ Solo admin. Enviar uno o varios campos; no se aceptan otros:
 {
   "status": "en_proceso",
   "category": "bug",
-  "assigned_admin_id": 3
+  "assigned_admin_id": 3,
+  "updated_by": "{\"id\":1,\"firstName\":\"Alex\",\"lastName\":\"Ramirez\",\"role\":\"admin\"}"
 }
 ```
 
-Valores válidos de estado: `abierto`, `en_proceso`, `cerrado`. El admin asignado debe existir y estar activo; enviar `null` para quitar la asignación. La respuesta `200` devuelve el detalle actualizado, incluidas las respuestas.
+Valores válidos de estado: `abierto`, `en_proceso`, `cerrado`. El admin asignado debe existir y estar activo; enviar `null` para quitar la asignación. Debe enviarse al menos un campo actualizable (`status`, `category` o `assigned_admin_id`); `updated_by` es opcional y debe ser JSON string cuyo `id` coincida con el admin autenticado. Su nombre/rol se ignoran y no se almacena. La respuesta `200` devuelve el detalle actualizado, incluidas las respuestas.
 
 ### POST `/api/tickets/{id}/reply`
 

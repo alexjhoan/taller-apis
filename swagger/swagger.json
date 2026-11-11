@@ -1235,7 +1235,7 @@
         "security": [{ "BearerAuth": [] }],
         "tags": ["Tickets"],
         "summary": "Create a support ticket",
-        "description": "Available to any active authenticated user. The owner is derived from the JWT; user_id, status, and assignment cannot be supplied by the client.",
+        "description": "Available to any active authenticated user. The owner is derived from the JWT; user_id, status, and assignment cannot be supplied by the client. Optional updated_by is accepted as metadata only when its JSON id matches the authenticated user; it is not stored.",
         "requestBody": { "$ref": "#/components/requestBodies/TicketCreate" },
         "responses": {
           "201": {
@@ -1258,7 +1258,8 @@
             }
           },
           "401": { "description": "Missing, invalid, or inactive user bearer token" },
-          "422": { "description": "Invalid title, description, category, or unsupported payload field" },
+          "403": { "description": "updated_by ID does not match the authenticated user" },
+          "422": { "description": "Invalid title, description, category, updated_by JSON, or unsupported payload field" },
           "500": { "description": "Database error" }
         }
       },
@@ -1357,7 +1358,7 @@
         "security": [{ "BearerAuth": [] }],
         "tags": ["Tickets"],
         "summary": "Update ticket status, category, or assignment",
-        "description": "Admin-only. assigned_admin_id must be null or identify an active administrator. At least one supported field is required.",
+        "description": "Admin-only. assigned_admin_id must be null or identify an active administrator. At least one of status, category, or assigned_admin_id is required. Optional updated_by is accepted as metadata only when its JSON id matches the authenticated admin; it is not stored.",
         "parameters": [{ "$ref": "#/components/parameters/idPath" }],
         "requestBody": { "$ref": "#/components/requestBodies/TicketUpdate" },
         "responses": {
@@ -1370,9 +1371,9 @@
             }
           },
           "401": { "description": "Missing or invalid bearer token" },
-          "403": { "description": "Administrator role required" },
+          "403": { "description": "Administrator role required, or updated_by ID does not match the authenticated user" },
           "404": { "description": "Ticket not found" },
-          "422": { "description": "Invalid status, category, assignee, or unsupported payload field" },
+          "422": { "description": "Invalid status, category, assignee, updated_by JSON, empty update, or unsupported payload field" },
           "500": { "description": "Database error" }
         }
       }
@@ -2532,7 +2533,12 @@
                   "maxLength": 65535,
                   "description": "UTF-8 text stored in a MySQL TEXT column (maximum 65,535 bytes)."
                 },
-                "category": { "type": "string", "enum": ["soporte", "sugerencia", "bug"], "default": "soporte" }
+                "category": { "type": "string", "enum": ["soporte", "sugerencia", "bug"], "default": "soporte" },
+                "updated_by": {
+                  "type": "string",
+                  "description": "Optional JSON metadata. Its id must match the authenticated user; supplied name and role are ignored, and this value is not stored.",
+                  "example": "{\"id\":1,\"firstName\":\"Alex\",\"lastName\":\"Ramirez\",\"role\":\"admin\"}"
+                }
               },
               "additionalProperties": false
             }
@@ -2546,11 +2552,22 @@
             "schema": {
               "type": "object",
               "minProperties": 1,
+              "description": "Include at least one of status, category, or assigned_admin_id. updated_by is optional metadata and cannot be sent by itself.",
               "properties": {
                 "status": { "type": "string", "enum": ["abierto", "en_proceso", "cerrado"] },
                 "category": { "type": "string", "enum": ["soporte", "sugerencia", "bug"] },
-                "assigned_admin_id": { "type": "integer", "minimum": 1, "nullable": true }
+                "assigned_admin_id": { "type": "integer", "minimum": 1, "nullable": true },
+                "updated_by": {
+                  "type": "string",
+                  "description": "Optional JSON metadata. Its id must match the authenticated admin; supplied name and role are ignored, and this value is not stored.",
+                  "example": "{\"id\":1,\"firstName\":\"Alex\",\"lastName\":\"Ramirez\",\"role\":\"admin\"}"
+                }
               },
+              "anyOf": [
+                { "required": ["status"] },
+                { "required": ["category"] },
+                { "required": ["assigned_admin_id"] }
+              ],
               "additionalProperties": false
             }
           }
